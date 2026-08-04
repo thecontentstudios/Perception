@@ -1,8 +1,10 @@
 'use client';
 
+import { useEffect } from 'react';
 import { useApp } from '@/lib/store';
 import { CHANNEL_META } from '@/lib/channels';
 import { dateKeyOf, fmtDateTime, timeOf } from '@/lib/dates';
+import { useResizable } from '@/lib/use-ui';
 import type { ChannelVariation } from '@/lib/types';
 import { STATUS_LABEL, StatusPill, WarningsList } from './ui';
 import { PlatformPreview } from './PlatformPreview';
@@ -13,6 +15,26 @@ import { PlatformPreview } from './PlatformPreview';
  */
 export function VariationEditor({ variationId, onClose }: { variationId: string; onClose: () => void }) {
   const { state, dispatch, campaignById, brandById, itemById, assetsFor, preflightFor } = useApp();
+  const { size: width, dragging, handleProps } = useResizable({
+    key: 'perception.panel.width',
+    initial: 460,
+    min: 380,
+    max: 900,
+    edge: 'left',
+  });
+
+  // Escape closes the panel; the resize drag paints a global cursor.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  useEffect(() => {
+    document.body.classList.toggle('resizing', dragging);
+    return () => document.body.classList.remove('resizing');
+  }, [dragging]);
+
   const v = state.variations.find((x) => x.id === variationId);
   if (!v) return null;
   const campaign = campaignById(v.campaignId);
@@ -30,7 +52,12 @@ export function VariationEditor({ variationId, onClose }: { variationId: string;
   return (
     <>
       <div className="overlay" onClick={onClose} aria-hidden />
-      <aside className="side-panel" aria-label="Edit content">
+      <aside
+        className="side-panel"
+        aria-label="Edit content"
+        style={{ width: `min(${width}px, 96vw)` }}
+      >
+        <button className={`resizer ${dragging ? 'dragging' : ''}`} {...handleProps} />
         <div className="sp-head">
           <div>
             <h3 style={{ fontSize: 14.5 }}>{item?.title}</h3>

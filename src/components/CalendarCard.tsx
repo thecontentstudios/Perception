@@ -51,8 +51,20 @@ export function CalendarCard({
         onDragStart?.(v.id);
       }}
       onDragEnd={onDragEnd}
-      title={`${item?.title ?? ''} — ${campaign?.name ?? ''}`}
+      title={`${item?.title ?? ''} — ${campaign?.name ?? ''}${draggable ? ' (drag to reschedule)' : ''}`}
     >
+      {draggable && (
+        <span className="grip" aria-hidden>
+          <svg width="9" height="9" viewBox="0 0 10 10" fill="currentColor">
+            <circle cx="2.5" cy="2" r="1" />
+            <circle cx="7.5" cy="2" r="1" />
+            <circle cx="2.5" cy="5" r="1" />
+            <circle cx="7.5" cy="5" r="1" />
+            <circle cx="2.5" cy="8" r="1" />
+            <circle cx="7.5" cy="8" r="1" />
+          </svg>
+        </span>
+      )}
       {assets[0] && !dense && <MediaThumb asset={assets[0]} size={34} />}
       <span className="cc-body">
         <span className="cc-top">

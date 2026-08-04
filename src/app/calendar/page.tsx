@@ -10,7 +10,9 @@ import {
   isSameMonth, monthGrid, weekOf,
 } from '@/lib/dates';
 import { byDay, TODAY, useApp } from '@/lib/store';
-import type { Channel, ChannelVariation } from '@/lib/types';
+import { useAnnouncer, usePersisted } from '@/lib/use-ui';
+import { fmtDate } from '@/lib/dates';
+import type { ChannelVariation } from '@/lib/types';
 
 type View = 'month' | 'week' | 'lanes' | 'list';
 
@@ -23,6 +25,8 @@ export default function CalendarPage() {
   const [dropDay, setDropDay] = useState<string | null>(null);
   const [approvalsOnly, setApprovalsOnly] = useState(false);
   const [checked, setChecked] = useState<Set<string>>(new Set());
+  const [ideasHidden, setIdeasHidden] = usePersisted('perception.calendar.ideasHidden', false);
+  const [announcement, announce] = useAnnouncer();
 
   const filtered = useMemo(
     () => (approvalsOnly ? visibleVariations.filter((v) => v.status === 'review') : visibleVariations),
@@ -40,7 +44,11 @@ export default function CalendarPage() {
     onDrop: (e: React.DragEvent) => {
       e.preventDefault();
       const id = e.dataTransfer.getData('text/plain');
-      if (id) dispatch({ type: 'reschedule', variationId: id, dateKey });
+      if (id) {
+        const moved = visibleVariations.find((v) => v.id === id);
+        dispatch({ type: 'reschedule', variationId: id, dateKey });
+        announce(`Moved ${itemById(moved?.contentItemId ?? '')?.title ?? 'item'} to ${fmtDate(dateKey)}.`);
+      }
       setDropDay(null);
       setDraggingId(null);
     },
@@ -89,9 +97,25 @@ export default function CalendarPage() {
         <button className={`btn sm ${approvalsOnly ? 'primary' : ''}`} onClick={() => setApprovalsOnly(!approvalsOnly)}>
           Needs approval {approvalsOnly ? '· on' : ''}
         </button>
+        {view !== 'list' && (
+          <button
+            className="btn sm"
+            onClick={() => setIdeasHidden(!ideasHidden)}
+            aria-expanded={!ideasHidden}
+            title={ideasHidden ? 'Show the unscheduled ideas rail' : 'Hide the rail and widen the calendar'}
+          >
+            {ideasHidden ? '‹ Show ideas' : 'Hide ideas ›'}
+            {unscheduled.length > 0 && <span className="pill neutral">{unscheduled.length}</span>}
+          </button>
+        )}
       </div>
 
-      <div className={view === 'list' ? '' : 'cal-layout'}>
+      {/* Drag results have no focus change — announce them politely. */}
+      <div className="sr-only" role="status" aria-live="polite">
+        {announcement}
+      </div>
+
+      <div className={view === 'list' ? '' : `cal-layout ${ideasHidden ? 'railed' : ''}`}>
         <div>
           {view === 'month' && (
             <div className="cal-month">
