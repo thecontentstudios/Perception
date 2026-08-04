@@ -100,6 +100,10 @@ export type ConnectionStatus =
   | 'expiring'
   | 'not_connected';
 
+/**
+ * A ConnectedAccount is the *authorization* — one OAuth grant from one person
+ * for one platform. It is not a place you can post.
+ */
 export interface ConnectedAccount {
   id: string;
   channel: Channel;
@@ -112,6 +116,86 @@ export interface ConnectedAccount {
   scopes: string[];
   expiresAt: string | null; // ISO date
   lastSyncAt: string | null;
+}
+
+/**
+ * A PublishDestination is a *place you can actually post*: one Facebook Page,
+ * one Instagram professional account, one Google Business location, one
+ * LinkedIn company page.
+ *
+ * This is the distinction that makes cross-posting real. One authorization
+ * usually yields several destinations, they belong to different businesses in
+ * the workspace, and permissions can differ per destination — a token can be
+ * healthy while one Page in it still lacks a posting role. Publishing targets
+ * destinations, never accounts.
+ */
+export interface PublishDestination {
+  id: string;
+  /** The authorization this destination came from. */
+  accountId: string;
+  channel: Channel;
+  /** The name as the platform reports it. */
+  name: string;
+  /** Page · Professional account · Location · Company page · Sender domain */
+  kind: string;
+  /** The platform's own identifier, used for publishing and dedup. */
+  externalId: string;
+  /** Which business in the workspace this belongs to; null = not yet mapped. */
+  brandId: string | null;
+  /** Off means "never publish here", even if selected in bulk. */
+  enabled: boolean;
+  followers: number | null;
+  /** Destination-scoped problems — a missing role, an unverified location. */
+  issues: string[];
+  /** Hue for the generated avatar chip, so destinations stay recognisable. */
+  hue: number;
+}
+
+// ---------------------------------------------------------------------------
+// Publishing pipeline
+// ---------------------------------------------------------------------------
+
+/** The stages every publish walks through, in order. */
+export type PublishStage =
+  | 'queued'
+  | 'validating'
+  | 'uploading'
+  | 'publishing'
+  | 'verifying'
+  | 'done'
+  | 'failed';
+
+export const PUBLISH_STAGE_LABEL: Record<PublishStage, string> = {
+  queued: 'Queued',
+  validating: 'Checking',
+  uploading: 'Uploading media',
+  publishing: 'Publishing',
+  verifying: 'Confirming',
+  done: 'Published',
+  failed: 'Failed',
+};
+
+/**
+ * One publish attempt against one destination. A fan-out post creates one job
+ * per destination — they succeed and fail independently, which is the whole
+ * point: a dead LinkedIn token must not stop the Instagram post.
+ */
+export interface PublishJob {
+  id: string;
+  destinationId: string;
+  channel: Channel;
+  stage: PublishStage;
+  /**
+   * Stable across retries so a worker that crashed after the platform
+   * accepted the post can never publish it twice.
+   */
+  idempotencyKey: string;
+  attempt: number;
+  error: string | null;
+  /** Platform post id once it lands. */
+  externalId: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -219,6 +303,12 @@ export interface ChannelVariation {
   contentItemId: string;
   campaignId: string;
   channel: Channel;
+  /**
+   * The specific place this publishes to. Null falls back to the brand's
+   * default destination for the channel — but preflight surfaces that,
+   * because "somewhere on Facebook" is not a publishing plan.
+   */
+  destinationId?: string | null;
   format: ContentFormat;
   status: VariationStatus;
   /** ISO datetime (minutes precision) or null while unscheduled */

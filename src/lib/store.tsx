@@ -3,14 +3,15 @@
 import { createContext, useContext, useMemo, useReducer, type ReactNode } from 'react';
 import {
   ACCOUNTS, APPROVALS, AUDIT, BRANDS, CAMPAIGNS, CONTACTS, CONTENT_ITEMS,
-  CONVERSATIONS, MEDIA, ORG, PERFORMANCE, SEGMENTS, TEMPLATES, TODAY, USERS, VARIATIONS,
+  CONVERSATIONS, DESTINATIONS, DISCOVERABLE_DESTINATIONS, MEDIA, ORG, PERFORMANCE, SEGMENTS, TEMPLATES, TODAY, USERS, VARIATIONS,
 } from './demo-data';
 import { preflight, type PreflightContext } from './preflight';
 import { dateKeyOf } from './dates';
+import { CHANNEL_META } from './channels';
 import type {
-  Approval, AuditEvent, Brand, Campaign, CampaignPerformance, ChannelVariation,
+  Approval, AuditEvent, Brand, Campaign, CampaignPerformance, Channel, ChannelVariation,
   ConnectedAccount, Contact, ContentItem, Conversation, MediaAsset,
-  PreflightWarning, VariationStatus,
+  PreflightWarning, PublishDestination, PublishJob, VariationStatus,
 } from './types';
 
 export interface AppState {
@@ -23,6 +24,9 @@ export interface AppState {
   contacts: Contact[];
   approvals: Approval[];
   audit: AuditEvent[];
+  destinations: PublishDestination[];
+  /** Live fan-out jobs, newest batch first. */
+  jobs: PublishJob[];
   /** brand filter applied across the app; 'all' shows the whole workspace */
   activeBrandId: string;
 }
@@ -38,6 +42,13 @@ type Action =
   | { type: 'setAltText'; mediaId: string; altText: string }
   | { type: 'conversationStatus'; conversationId: string; status: Conversation['status'] }
   | { type: 'setBrand'; brandId: string }
+  | { type: 'toggleDestination'; destinationId: string }
+  | { type: 'mapDestination'; destinationId: string; brandId: string | null }
+  | { type: 'connectAccount'; accountId: string; destinationIds: string[] }
+  | { type: 'discoverDestinations'; accountId: string; channel: Channel }
+  | { type: 'startJobs'; jobs: PublishJob[] }
+  | { type: 'advanceJob'; jobId: string; stage: PublishJob['stage']; error?: string | null; externalId?: string | null }
+  | { type: 'retryJob'; jobId: string }
   | { type: 'duplicateVariation'; variationId: string }
   | { type: 'addCampaign'; campaign: Campaign; items: ContentItem[]; variations: ChannelVariation[]; auditDetail: string };
 
@@ -150,6 +161,73 @@ function reducer(state: AppState, a: Action): AppState {
       };
     case 'setBrand':
       return { ...state, activeBrandId: a.brandId };
+    case 'toggleDestination':
+      return {
+        ...state,
+        destinations: state.destinations.map((d) =>
+          d.id === a.destinationId ? { ...d, enabled: !d.enabled } : d
+        ),
+      };
+    case 'mapDestination':
+      return {
+        ...state,
+        destinations: state.destinations.map((d) =>
+          d.id === a.destinationId ? { ...d, brandId: a.brandId } : d
+        ),
+      };
+    case 'discoverDestinations': {
+      // What the platform hands back right after OAuth. Idempotent: authorizing
+      // twice must not duplicate the destination list.
+      if (state.destinations.some((d) => d.accountId === a.accountId)) return state;
+      const found = (DISCOVERABLE_DESTINATIONS[a.channel] ?? []).map((d, i) => ({
+        ...d,
+        id: `d-${a.accountId}-${i}`,
+        accountId: a.accountId,
+        enabled: false,
+      }));
+      return { ...state, destinations: [...state.destinations, ...found] };
+    }
+    case 'connectAccount':
+      return {
+        ...state,
+        accounts: state.accounts.map((acc) =>
+          acc.id === a.accountId
+            ? { ...acc, status: 'connected', expiresAt: '2027-02-01', lastSyncAt: `${TODAY}T09:45` }
+            : acc
+        ),
+        destinations: state.destinations.map((d) =>
+          a.destinationIds.includes(d.id) ? { ...d, enabled: true } : d
+        ),
+        audit: [
+          audit('connection.authorized', a.accountId, `Authorized and enabled ${a.destinationIds.length} destinations.`),
+          ...state.audit,
+        ],
+      };
+    case 'startJobs':
+      return { ...state, jobs: [...a.jobs, ...state.jobs].slice(0, 60) };
+    case 'advanceJob':
+      return {
+        ...state,
+        jobs: state.jobs.map((j) =>
+          j.id === a.jobId
+            ? {
+                ...j,
+                stage: a.stage,
+                error: a.error !== undefined ? a.error : j.error,
+                externalId: a.externalId !== undefined ? a.externalId : j.externalId,
+                finishedAt: a.stage === 'done' || a.stage === 'failed' ? `${TODAY}T09:45` : j.finishedAt,
+              }
+            : j
+        ),
+      };
+    case 'retryJob':
+      return {
+        ...state,
+        jobs: state.jobs.map((j) =>
+          // Same idempotency key on purpose: a retry must never double-post.
+          j.id === a.jobId ? { ...j, stage: 'queued', attempt: j.attempt + 1, error: null } : j
+        ),
+      };
     case 'duplicateVariation': {
       const src = state.variations.find((v) => v.id === a.variationId);
       if (!src) return state;
@@ -184,6 +262,8 @@ const initialState: AppState = {
   contacts: CONTACTS,
   approvals: APPROVALS,
   audit: AUDIT,
+  destinations: DESTINATIONS,
+  jobs: [],
   activeBrandId: 'all',
 };
 
@@ -200,6 +280,13 @@ export interface AppApi {
   visibleVariations: ChannelVariation[];
   visibleCampaigns: Campaign[];
   preflightFor: (v: ChannelVariation) => PreflightWarning[];
+  /** Destinations belonging to one authorization. */
+  destinationsForAccount: (accountId: string) => PublishDestination[];
+  /** Destinations that can actually receive a post right now. */
+  publishableDestinations: () => PublishDestination[];
+  destinationById: (id: string) => PublishDestination | undefined;
+  /** Why a destination can't publish, or null when it can. */
+  destinationBlocker: (d: PublishDestination) => string | null;
 }
 
 const Ctx = createContext<AppApi | null>(null);
@@ -231,9 +318,37 @@ export function AppProvider({ children }: { children: ReactNode }) {
       };
       return preflight(v, ctx);
     };
+    const destinationById = (id: string) => state.destinations.find((d) => d.id === id);
+    const destinationsForAccount = (accountId: string) =>
+      state.destinations.filter((d) => d.accountId === accountId);
+
+    /**
+     * A destination is publishable only when its authorization is healthy, it
+     * is switched on, mapped to a business, and free of destination-scoped
+     * permission problems. Each of those fails differently and each gets its
+     * own sentence, because "couldn't post" is not an actionable message.
+     */
+    const destinationBlocker = (d: PublishDestination): string | null => {
+      const account = state.accounts.find((acc) => acc.id === d.accountId);
+      if (!account) return 'The authorization for this destination is gone — reconnect it.';
+      if (account.status === 'needs_reconnect') return `${CHANNEL_META[d.channel].label} needs reconnecting before anything can publish here.`;
+      if (account.status === 'not_connected') return `${CHANNEL_META[d.channel].label} is not connected.`;
+      if (!d.enabled) return 'This destination is switched off in Connections.';
+      if (!d.brandId && d.channel !== 'email') return 'Not assigned to a business yet.';
+      if (d.issues.length > 0) return d.issues[0];
+      return null;
+    };
+
+    const publishableDestinations = () =>
+      state.destinations.filter((d) => destinationBlocker(d) === null);
+
     return {
       state,
       dispatch,
+      destinationById,
+      destinationsForAccount,
+      publishableDestinations,
+      destinationBlocker,
       campaignById,
       brandById,
       itemById,

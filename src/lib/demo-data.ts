@@ -12,7 +12,9 @@ import type {
   ContentItem,
   Conversation,
   MediaAsset,
+  Channel,
   Organization,
+  PublishDestination,
   User,
 } from './types';
 
@@ -124,6 +126,78 @@ export const ACCOUNTS: ConnectedAccount[] = [
   { id: 'a-wa', channel: 'whatsapp', displayName: 'WhatsApp Business', destinationKind: 'Business numbers', status: 'not_connected', brandId: null, connectedByUserId: null, scopes: [], expiresAt: null, lastSyncAt: null },
   { id: 'a-sms', channel: 'sms', displayName: 'SMS', destinationKind: 'Sending numbers', status: 'not_connected', brandId: null, connectedByUserId: null, scopes: [], expiresAt: null, lastSyncAt: null },
 ];
+
+// ---------------------------------------------------------------------------
+// Publish destinations — the actual places posts land
+// ---------------------------------------------------------------------------
+
+/**
+ * One authorization yields several destinations. They belong to different
+ * businesses, and permissions can differ per destination: the Meta token below
+ * is healthy, but the Loopwise Page still lacks a posting role, so that one
+ * destination fails while the other three publish fine.
+ */
+export const DESTINATIONS: PublishDestination[] = [
+  // Facebook Pages (from a-fb)
+  { id: 'd-fb-green', accountId: 'a-fb', channel: 'facebook', name: 'GreenScape Landscaping', kind: 'Page', externalId: '10021', brandId: 'b-green', enabled: true, followers: 1840, issues: [], hue: 140 },
+  { id: 'd-fb-harbor', accountId: 'a-fb', channel: 'facebook', name: 'Harborview Rentals', kind: 'Page', externalId: '10022', brandId: 'b-harbor', enabled: true, followers: 640, issues: [], hue: 215 },
+  { id: 'd-fb-velvet', accountId: 'a-fb', channel: 'facebook', name: 'Velvet Room Studio', kind: 'Page', externalId: '10023', brandId: 'b-velvet', enabled: true, followers: 780, issues: [], hue: 268 },
+  { id: 'd-fb-loop', accountId: 'a-fb', channel: 'facebook', name: 'Loopwise', kind: 'Page', externalId: '10024', brandId: 'b-loop', enabled: false, followers: 410, issues: ['You have Analyst access on this Page — posting needs Editor or higher'], hue: 178 },
+
+  // Instagram professional accounts (from a-ig)
+  { id: 'd-ig-green', accountId: 'a-ig', channel: 'instagram', name: '@greenscapelandscaping', kind: 'Professional account', externalId: '20031', brandId: 'b-green', enabled: true, followers: 920, issues: ['No link in bio — "link in bio" captions currently go nowhere'], hue: 140 },
+  { id: 'd-ig-harbor', accountId: 'a-ig', channel: 'instagram', name: '@harborviewrentals', kind: 'Professional account', externalId: '20032', brandId: 'b-harbor', enabled: true, followers: 1120, issues: [], hue: 215 },
+  { id: 'd-ig-velvet', accountId: 'a-ig', channel: 'instagram', name: '@velvetroomstudio', kind: 'Professional account', externalId: '20033', brandId: 'b-velvet', enabled: true, followers: 4300, issues: [], hue: 268 },
+
+  // LinkedIn company pages (from a-li — token expired, so both are held)
+  { id: 'd-li-green', accountId: 'a-li', channel: 'linkedin', name: 'GreenScape Landscaping', kind: 'Company page', externalId: '30041', brandId: 'b-green', enabled: true, followers: 210, issues: [], hue: 140 },
+  { id: 'd-li-loop', accountId: 'a-li', channel: 'linkedin', name: 'Loopwise', kind: 'Company page', externalId: '30042', brandId: 'b-loop', enabled: true, followers: 3400, issues: [], hue: 178 },
+
+  // Google Business locations (from a-gbp)
+  { id: 'd-gbp-green', accountId: 'a-gbp', channel: 'google_business', name: 'GreenScape Landscaping — Maplewood', kind: 'Location', externalId: '40051', brandId: 'b-green', enabled: true, followers: null, issues: [], hue: 140 },
+  { id: 'd-gbp-harbor', accountId: 'a-gbp', channel: 'google_business', name: 'Harborview Rentals — Portsmouth', kind: 'Location', externalId: '40052', brandId: 'b-harbor', enabled: true, followers: null, issues: [], hue: 215 },
+  { id: 'd-gbp-velvet', accountId: 'a-gbp', channel: 'google_business', name: 'Velvet Room Studio — Nashville', kind: 'Location', externalId: '40053', brandId: 'b-velvet', enabled: true, followers: null, issues: ['Location is pending re-verification — Google rejects posts until it clears'], hue: 268 },
+
+  // Email sender domain (from a-em)
+  { id: 'd-em-main', accountId: 'a-em', channel: 'email', name: 'hello@summitlocal.co', kind: 'Sender domain', externalId: 'summitlocal.co', brandId: null, enabled: true, followers: null, issues: [], hue: 262 },
+
+  // Websites (from a-web)
+  { id: 'd-web-green', accountId: 'a-web', channel: 'website', name: 'greenscapenj.com', kind: 'WordPress site', externalId: 'wp-1', brandId: 'b-green', enabled: true, followers: null, issues: [], hue: 140 },
+  { id: 'd-web-harbor', accountId: 'a-web', channel: 'website', name: 'harborviewrentals.com', kind: 'Squarespace site', externalId: 'sq-1', brandId: 'b-harbor', enabled: true, followers: null, issues: [], hue: 215 },
+  { id: 'd-web-loop', accountId: 'a-web', channel: 'website', name: 'loopwise.app', kind: 'Custom site', externalId: 'cu-1', brandId: 'b-loop', enabled: true, followers: null, issues: [], hue: 178 },
+];
+
+/**
+ * What each platform returns from `listDestinations()` once you authorize it.
+ * Nothing here exists until the connect flow completes — discovering these is
+ * the whole point of authorization.
+ */
+export const DISCOVERABLE_DESTINATIONS: Partial<
+  Record<Channel, Omit<PublishDestination, 'id' | 'accountId' | 'enabled'>[]>
+> = {
+  bluesky: [
+    { channel: 'bluesky', name: '@greenscapenj.bsky.social', kind: 'Handle', externalId: 'did:plc:gs01', brandId: 'b-green', followers: 0, issues: [], hue: 140 },
+    { channel: 'bluesky', name: '@loopwise.bsky.social', kind: 'Handle', externalId: 'did:plc:lw01', brandId: 'b-loop', followers: 0, issues: [], hue: 178 },
+  ],
+  threads: [
+    { channel: 'threads', name: '@greenscapelandscaping', kind: 'Profile', externalId: 'th-1', brandId: 'b-green', followers: 310, issues: [], hue: 140 },
+    { channel: 'threads', name: '@velvetroomstudio', kind: 'Profile', externalId: 'th-2', brandId: 'b-velvet', followers: 1450, issues: [], hue: 268 },
+  ],
+  pinterest: [
+    { channel: 'pinterest', name: 'Harborview — Interiors', kind: 'Board', externalId: 'pb-1', brandId: 'b-harbor', followers: null, issues: [], hue: 215 },
+    { channel: 'pinterest', name: 'Harborview — Seacoast Living', kind: 'Board', externalId: 'pb-2', brandId: 'b-harbor', followers: null, issues: [], hue: 215 },
+    { channel: 'pinterest', name: 'GreenScape — Before & After', kind: 'Board', externalId: 'pb-3', brandId: 'b-green', followers: null, issues: [], hue: 140 },
+  ],
+  x: [
+    { channel: 'x', name: '@loopwiseapp', kind: 'Account', externalId: 'x-1', brandId: 'b-loop', followers: 1250, issues: [], hue: 178 },
+  ],
+  tiktok: [
+    { channel: 'tiktok', name: '@velvetroomstudio', kind: 'Account', externalId: 'tt-1', brandId: 'b-velvet', followers: 2100, issues: ['Uploads land as private drafts until our TikTok content audit clears'], hue: 268 },
+  ],
+  youtube: [
+    { channel: 'youtube', name: 'Loopwise', kind: 'Channel', externalId: 'yt-1', brandId: 'b-loop', followers: 340, issues: [], hue: 178 },
+  ],
+};
 
 // ---------------------------------------------------------------------------
 // Media library

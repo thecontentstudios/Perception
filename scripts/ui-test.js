@@ -182,6 +182,72 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
   const errShown = await page.$('.warning-row.block');
   errShown ? ok('unknown domain shows an honest failure') : bad('no error for unknown domain');
 
+  console.log('\n== 7g. Cross-post fan-out: independent jobs, retry, no double-post ==');
+  await page.setViewportSize({ width: 1500, height: 1050 });
+  await page.goto('http://localhost:3000/post', { waitUntil: 'networkidle' });
+  const dests = await page.$$('.dest-row');
+  const blockedDests = await page.$$('.dest-row.blocked');
+  dests.length >= 12 ? ok(`${dests.length} publish destinations listed`) : bad('too few destinations: ' + dests.length);
+  blockedDests.length >= 3
+    ? ok(`${blockedDests.length} destinations blocked with reasons`)
+    : bad('expected blocked destinations, got ' + blockedDests.length);
+  const distinctReasons = await page.$$eval('.dest-row.blocked .pill', (els) =>
+    new Set(els.map((e) => e.textContent.trim())).size
+  );
+  distinctReasons >= 3
+    ? ok(`${distinctReasons} distinct blocking reasons (not one generic error)`)
+    : bad('blocking reasons not specific: ' + distinctReasons);
+
+  await page.fill('#qp-body', 'Fall cleanup slots are filling fast.');
+  await page.click('text=Select all available');
+  await page.waitForTimeout(300);
+  await page.click('button.btn.primary:has-text("Post to")');
+  await page.waitForTimeout(250);
+  const confirmVisible = await page.$('text=Yes, post now');
+  confirmVisible ? ok('publishing asks for confirmation first') : bad('no confirmation step');
+  await page.click('text=Yes, post now');
+  await page.waitForTimeout(5200);
+  const publishedCount = await page.$$eval('.job-row .pill.published', (e) => e.length);
+  const failedCount = await page.$$eval('.job-row .pill.failed', (e) => e.length);
+  const totalJobs = await page.$$eval('.job-row', (e) => e.length);
+  publishedCount > 0 ? ok(`${publishedCount} destinations published`) : bad('nothing published');
+  failedCount === 1
+    ? ok('one destination failed without stopping the others')
+    : bad(`expected 1 independent failure, got ${failedCount}`);
+  const retryBtn = await page.$('.job-row button:has-text("Retry")');
+  if (retryBtn) {
+    await retryBtn.click();
+    await page.waitForTimeout(2800);
+    const after = await page.$$eval('.job-row .pill.published', (e) => e.length);
+    const rows = await page.$$eval('.job-row', (e) => e.length);
+    after === totalJobs ? ok('retry recovered the failed destination') : bad(`retry left ${totalJobs - after} unpublished`);
+    rows === totalJobs ? ok('retry did not create a duplicate job (idempotent)') : bad('job count grew on retry');
+  } else bad('no retry button on the failed job');
+
+  console.log('\n== 7h. Connect flow: scopes, authorize, destination mapping ==');
+  await page.goto('http://localhost:3000/connections', { waitUntil: 'networkidle' });
+  const connectBtn = await page.$('button:text-is("Connect")');
+  if (connectBtn) {
+    await connectBtn.click();
+    await page.waitForTimeout(350);
+    const hasPrereqs = await page.$('text=Before you start');
+    hasPrereqs ? ok('connect flow opens on prerequisites') : bad('no prerequisites step');
+    await page.click('.sp-foot button:has-text("Continue")');
+    await page.waitForTimeout(250);
+    const scopeReasons = await page.$$eval('code.mono', (e) => e.length);
+    scopeReasons >= 2 ? ok(`${scopeReasons} scopes listed with reasons`) : bad('scopes not itemised');
+    await page.click('.sp-foot button:has-text("Continue")');
+    await page.waitForTimeout(250);
+    const authBtn = await page.$('button:has-text("Authorize")');
+    authBtn ? ok('authorize step present') : bad('no authorize step');
+    await authBtn.click();
+    await page.waitForTimeout(350);
+    const mapSelects = await page.$$('.side-panel select');
+    mapSelects.length >= 1
+      ? ok(`${mapSelects.length} destinations offered with business mapping`)
+      : bad('no destination mapping step');
+  } else bad('no connectable account found');
+
   console.log('\n== 8. Reduced motion ==');
   const ctx2 = await browser.newContext({ viewport: { width: 1280, height: 800 }, reducedMotion: 'reduce' });
   const p2 = await ctx2.newPage();

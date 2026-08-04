@@ -1,6 +1,9 @@
 'use client';
 
 import { useState } from 'react';
+import { ConnectFlow } from '@/components/ConnectFlow';
+import { connectSpecFor } from '@/lib/connect-specs';
+import { BRANDS } from '@/lib/store';
 import { CHANNEL_META, ChannelIcon } from '@/lib/channels';
 import { fmtDateTime, fmtShort } from '@/lib/dates';
 import { adapterFor } from '@/lib/connectors/registry';
@@ -14,13 +17,24 @@ const STATUS_TEXT: Record<ConnectedAccount['status'], { label: string; cls: stri
   not_connected: { label: 'Not connected', cls: 'draft' },
 };
 
-function AccountCard({ account }: { account: ConnectedAccount }) {
-  const { dispatch } = useApp();
+function AccountCard({ account, onConnect }: { account: ConnectedAccount; onConnect: (c: ConnectedAccount['channel']) => void }) {
+  const { dispatch, destinationsForAccount, destinationBlocker } = useApp();
   const [justConnected, setJustConnected] = useState(false);
+  const [open, setOpen] = useState(false);
+  const destinations = destinationsForAccount(account.id);
+  const live = destinations.filter((d) => destinationBlocker(d) === null).length;
   const adapter = adapterFor(account.channel);
   const caps = adapter.capabilities;
   const st = STATUS_TEXT[account.status];
-  const planned = caps.availability === 'planned';
+  /**
+   * Connectable means "we have specified how to connect this", not "it's in
+   * wave one". Bluesky needs no review at all and TikTok can be authorized
+   * today (uploads just land as drafts until our audit clears) — gating those
+   * behind a roadmap label would make the flow unreachable. Channels with no
+   * spec yet (partner-gated Nextdoor, Snapchat, WhatsApp, SMS) stay Planned.
+   */
+  const connectable = connectSpecFor(account.channel) !== null;
+  const planned = !connectable;
 
   return (
     <div className="card card-pad" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -61,6 +75,59 @@ function AccountCard({ account }: { account: ConnectedAccount }) {
         {planned && <span className="pill review">second release</span>}
       </div>
 
+      {destinations.length > 0 && (
+        <>
+          <button
+            className="btn sm ghost"
+            onClick={() => setOpen(!open)}
+            aria-expanded={open}
+            style={{ justifyContent: 'flex-start', padding: '2px 0' }}
+          >
+            {open ? '▾' : '▸'} {live} of {destinations.length} {destinations.length === 1 ? 'destination' : 'destinations'} can publish
+          </button>
+          {open && (
+            <div className="dest-tree">
+              {destinations.map((d) => {
+                const blocker = destinationBlocker(d);
+                return (
+                  <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+                    <input
+                      type="checkbox"
+                      checked={d.enabled}
+                      aria-label={`Publish to ${d.name}`}
+                      onChange={() => dispatch({ type: 'toggleDestination', destinationId: d.id })}
+                    />
+                    <span style={{ flex: 1, minWidth: 110 }}>
+                      <span style={{ fontWeight: 600, fontSize: 12 }}>{d.name}</span>
+                      <span style={{ color: 'var(--muted)', fontSize: 10.5, display: 'block' }}>{d.kind}</span>
+                    </span>
+                    <select
+                      className="select"
+                      style={{ fontSize: 11, padding: '3px 22px 3px 7px' }}
+                      aria-label={`Business for ${d.name}`}
+                      value={d.brandId ?? ''}
+                      onChange={(e) =>
+                        dispatch({ type: 'mapDestination', destinationId: d.id, brandId: e.target.value || null })
+                      }
+                    >
+                      <option value="">Unassigned</option>
+                      {BRANDS.map((b) => (
+                        <option key={b.id} value={b.id}>
+                          {b.name}
+                        </option>
+                      ))}
+                    </select>
+                    {blocker && (
+                      <div style={{ flexBasis: '100%', color: 'var(--st-critical)', fontSize: 11 }}>{blocker}</div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </>
+      )}
+
       <div style={{ marginTop: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
         {account.status === 'needs_reconnect' || account.status === 'expiring' ? (
           <button
@@ -73,7 +140,12 @@ function AccountCard({ account }: { account: ConnectedAccount }) {
             Reconnect
           </button>
         ) : account.status === 'not_connected' ? (
-          <button className="btn sm" disabled={planned} title={planned ? 'Coming in the second release' : 'Starts the OAuth flow'}>
+          <button
+            className="btn sm"
+            disabled={planned}
+            title={planned ? 'Coming in the second release' : 'Starts the connection flow'}
+            onClick={() => onConnect(account.channel)}
+          >
             {planned ? 'Planned' : 'Connect'}
           </button>
         ) : (
@@ -91,6 +163,7 @@ function AccountCard({ account }: { account: ConnectedAccount }) {
 
 export default function ConnectionsPage() {
   const { state } = useApp();
+  const [connecting, setConnecting] = useState<ConnectedAccount['channel'] | null>(null);
   const attention = state.accounts.filter((a) => a.status === 'needs_reconnect' || a.status === 'expiring');
   const healthy = state.accounts.filter((a) => a.status === 'connected');
   const available = state.accounts.filter((a) => a.status === 'not_connected');
@@ -112,7 +185,7 @@ export default function ConnectionsPage() {
           <div className="section-label">Needs attention</div>
           <div className="grid cols-3" style={{ marginBottom: 6 }}>
             {attention.map((a) => (
-              <AccountCard key={a.id} account={a} />
+              <AccountCard key={a.id} account={a} onConnect={setConnecting} />
             ))}
           </div>
         </>
@@ -121,16 +194,18 @@ export default function ConnectionsPage() {
       <div className="section-label">Connected</div>
       <div className="grid cols-3" style={{ marginBottom: 6 }}>
         {healthy.map((a) => (
-          <AccountCard key={a.id} account={a} />
+          <AccountCard key={a.id} account={a} onConnect={setConnecting} />
         ))}
       </div>
 
       <div className="section-label">Available destinations</div>
       <div className="grid cols-3">
         {available.map((a) => (
-          <AccountCard key={a.id} account={a} />
+          <AccountCard key={a.id} account={a} onConnect={setConnecting} />
         ))}
       </div>
+
+      {connecting && <ConnectFlow channel={connecting} onClose={() => setConnecting(null)} />}
 
       <div className="card card-pad" style={{ marginTop: 14 }}>
         <h3 style={{ marginBottom: 6 }}>How connectors work</h3>

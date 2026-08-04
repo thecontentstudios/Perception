@@ -1914,3 +1914,124 @@ code.mono {
   border-radius: 5px;
   padding: 1px 6px;
 }
+
+/* ---------------------------------------------------------------- quick post */
+
+.post-layout {
+  display: grid;
+  grid-template-columns: 1fr 420px;
+  gap: 14px;
+  align-items: start;
+}
+
+.post-layout > * {
+  min-width: 0;
+}
+
+@media (max-width: 1200px) {
+  .post-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* One selectable destination row. */
+.dest-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+
+.dest-row:hover {
+  border-color: var(--accent);
+}
+
+.dest-row.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.dest-row.blocked {
+  opacity: 0.62;
+  cursor: not-allowed;
+  background: var(--surface-2);
+}
+
+.dest-row.blocked:hover {
+  border-color: var(--border);
+}
+
+/* A publish job: destination, stage track, status, detail. */
+/* Two lines: identity + progress on top, outcome underneath. Keeps
+   destination names readable inside a narrow docked panel. */
+.job-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.job-detail {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.job-row:last-child {
+  border-bottom: none;
+}
+
+.job-track {
+  display: flex;
+  gap: 3px;
+}
+
+.job-pip {
+  width: 12px;
+  height: 5px;
+  border-radius: 99px;
+  background: var(--surface-2);
+  border: 1px solid var(--hairline);
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+
+.job-pip.on {
+  background: var(--st-good);
+  border-color: var(--st-good);
+}
+
+.job-pip.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  animation: pip-pulse 900ms var(--ease) infinite;
+}
+
+.job-pip.fail {
+  background: var(--st-critical);
+  border-color: var(--st-critical);
+}
+
+@keyframes pip-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+/* Connections: destinations nested under their authorization. */
+.dest-tree {
+  border-top: 1px solid var(--hairline);
+  margin-top: 10px;
+  padding-top: 9px;
+  display: grid;
+  gap: 5px;
+}
