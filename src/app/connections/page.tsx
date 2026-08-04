@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { ConnectFlow } from '@/components/ConnectFlow';
+import { LiveConnect } from '@/components/LiveConnect';
 import { connectSpecFor } from '@/lib/connect-specs';
 import { BRANDS } from '@/lib/store';
 import { CHANNEL_META, ChannelIcon } from '@/lib/channels';
@@ -206,6 +207,8 @@ export default function ConnectionsPage() {
       </div>
 
       {connecting && <ConnectFlow channel={connecting} onClose={() => setConnecting(null)} />}
+
+      <LiveConnect />
 
       <div className="card card-pad" style={{ marginTop: 14 }}>
         <h3 style={{ marginBottom: 6 }}>How connectors work</h3>

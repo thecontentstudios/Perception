@@ -24,3 +24,6 @@ yarn-error.log*
 
 # typescript
 *.tsbuildinfo
+
+# locally stored OAuth grants (encrypted, but never commit them)
+/.tokens/

@@ -248,6 +248,42 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
       : bad('no destination mapping step');
   } else bad('no connectable account found');
 
+  console.log('\n== 7i. Live connections: real OAuth wiring ==');
+  const statusRes = await page.request.get('http://localhost:3000/api/connect/status');
+  const st = await statusRes.json();
+  statusRes.ok() ? ok('status endpoint responds') : bad('status endpoint failed');
+  Array.isArray(st.providers) && st.providers.length >= 8
+    ? ok(`${st.providers.length} real OAuth providers configured`)
+    : bad('provider list missing');
+  const leaks = JSON.stringify(st).match(/(SECRET|access_token|accessJwt)"\s*:\s*"[^"]+"/i);
+  !leaks ? ok('status never returns secrets') : bad('status leaked a secret value');
+  const everyHasRedirect = st.providers.every((p) => p.redirectUri.includes('/api/connect/'));
+  everyHasRedirect ? ok('every provider prints its redirect URI') : bad('missing redirect URIs');
+
+  // Forged state must be rejected — this is the CSRF defence on the callback.
+  const forged = await page.request.get(
+    'http://localhost:3000/api/connect/facebook/callback?code=x&state=forged',
+    { maxRedirects: 0 }
+  );
+  const loc = forged.headers()['location'] ?? '';
+  loc.includes('connect=error') && loc.includes('State')
+    ? ok('callback rejects a forged state parameter')
+    : bad('callback did not reject forged state: ' + loc);
+
+  // Bluesky must refuse anything that is not an app password.
+  const bs = await page.request.post('http://localhost:3000/api/connect/bluesky', {
+    data: { handle: 'x.bsky.social', appPassword: 'my-real-account-password' },
+  });
+  const bsBody = await bs.json();
+  bs.status() === 400 && /app password/i.test(bsBody.error)
+    ? ok('Bluesky refuses a non-app-password')
+    : bad('Bluesky accepted a bad credential shape');
+
+  await page.goto('http://localhost:3000/connections', { waitUntil: 'networkidle' });
+  await page.waitForTimeout(600);
+  const livePanel = await page.$('text=Live connections');
+  livePanel ? ok('live connections panel renders') : bad('no live connections panel');
+
   console.log('\n== 8. Reduced motion ==');
   const ctx2 = await browser.newContext({ viewport: { width: 1280, height: 800 }, reducedMotion: 'reduce' });
   const p2 = await ctx2.newPage();
