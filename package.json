@@ -11,7 +11,9 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test:ui": "node scripts/ui-test.js"
+    "test:ui": "node scripts/ui-test.js",
+    "test:unit": "tsx scripts/unit-test.ts",
+    "test": "npm run test:unit && npm run test:ui"
   },
   "dependencies": {
     "next": "^15.4.0",
@@ -23,6 +25,7 @@
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "playwright-core": "^1.56.0",
-    "typescript": "^5.8.0"
+    "typescript": "^5.8.0",
+    "tsx": "^4.23.0"
   }
 }

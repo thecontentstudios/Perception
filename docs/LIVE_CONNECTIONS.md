@@ -82,3 +82,43 @@ without provisioning Postgres first, not to run a business on.
 | `POST /api/connect/bluesky` | Real AT Protocol session from handle + app password. |
 | `GET /api/connect/bluesky` | Is the session live, and whose. |
 | `DELETE /api/connect/bluesky` | Forget the session. |
+
+
+## Publishing for real
+
+`POST /api/publish { channel, text }` publishes through a stored grant.
+Bluesky is implemented; every other channel returns **501 with a reason**
+rather than pretending. Quick Post shows live accounts in their own green
+block, visually separate from the demo workspace — a post the world can see
+must never look like one that goes nowhere — and the confirmation says so
+explicitly before you send.
+
+### The two details that are easy to get silently wrong
+
+**Facets use UTF-8 byte offsets, not JavaScript string indices.** Any emoji or
+accented character before a link shifts the byte position. In our own test
+string, `indexOf` gives 22 where the correct byte offset is 26 — a four-byte
+drift caused by one 🍂 and an em dash. Get this wrong and the link either
+highlights the wrong span or renders as plain text. We index the encoded
+bytes, and `npm run test:unit` asserts the decoded slice equals the URL
+exactly.
+
+**The 300 limit counts graphemes, not `String.length`.** The family emoji
+👨‍👩‍👧‍👦 is one grapheme, seven code points, and eleven UTF-16 units. Counting
+with `.length` rejects valid posts. We use `Intl.Segmenter`.
+
+### Token refresh
+
+An expired access JWT is the most common recoverable failure, so the publisher
+retries **once** after refreshing with the stored refresh JWT, rotating and
+re-encrypting both. Only if the refresh itself fails does it ask the owner to
+reconnect. Verified end to end against a local AT Protocol mock: first publish
+hit an expired token, refreshed, retried, and succeeded.
+
+### Testing
+
+```bash
+npm run test:unit   # facet byte offsets, grapheme counting, crypto, PKCE
+npm run test:ui     # the browser suite, incl. publish refusals
+npm test            # both
+```

@@ -117,6 +117,9 @@ repeatedly without cleanup.
 | `npm run build` | Production build; fails on type errors |
 | `npm start` | Serve the production build (run `build` first) |
 | `npm run typecheck` | TypeScript check with no emit |
+| `npm run test:unit` | Facet byte offsets, grapheme counting, token crypto, PKCE |
+| `npm run test:ui` | Browser suite: nav, panels, drag-drop, discovery, fan-out, live connections (needs the server running) |
+| `npm test` | Both suites |
 
 Before pushing, `npm run typecheck && npm run build` is the full gate — the
 build type-checks and pre-renders every route, so a green build means every

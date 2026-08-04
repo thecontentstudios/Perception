@@ -284,6 +284,27 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
   const livePanel = await page.$('text=Live connections');
   livePanel ? ok('live connections panel renders') : bad('no live connections panel');
 
+  console.log('\n== 7j. Live publishing refuses honestly when not wired ==');
+  const notConnected = await page.request.post('http://localhost:3000/api/publish', {
+    data: { channel: 'bluesky', text: 'hello' },
+  });
+  const ncBody = await notConnected.json();
+  ncBody.ok === false && /not connected/i.test(ncBody.error)
+    ? ok('publish refuses without a grant instead of faking success')
+    : bad('publish did not refuse cleanly: ' + JSON.stringify(ncBody));
+
+  const unimpl = await page.request.post('http://localhost:3000/api/publish', {
+    data: { channel: 'instagram', text: 'hello' },
+  });
+  unimpl.status() === 501
+    ? ok('unimplemented channel returns 501 rather than pretending')
+    : bad('expected 501 for unimplemented channel, got ' + unimpl.status());
+
+  const empty = await page.request.post('http://localhost:3000/api/publish', {
+    data: { channel: 'bluesky', text: '   ' },
+  });
+  empty.status() === 400 ? ok('empty message rejected') : bad('empty message not rejected');
+
   console.log('\n== 8. Reduced motion ==');
   const ctx2 = await browser.newContext({ viewport: { width: 1280, height: 800 }, reducedMotion: 'reduce' });
   const p2 = await ctx2.newPage();

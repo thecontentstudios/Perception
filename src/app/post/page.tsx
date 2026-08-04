@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { PlatformPreview } from '@/components/PlatformPreview';
 import { MediaThumb, SevIcon, WarningsList, fmtNum } from '@/components/ui';
@@ -9,7 +9,7 @@ import { addDays, fmtDateTime } from '@/lib/dates';
 import { adapterFor } from '@/lib/connectors/registry';
 import { BRANDS, TODAY, useApp } from '@/lib/store';
 import { PUBLISH_STAGE_LABEL } from '@/lib/types';
-import type { ChannelVariation, PublishDestination, PublishJob, PublishStage } from '@/lib/types';
+import type { Channel, ChannelVariation, PublishDestination, PublishJob, PublishStage } from '@/lib/types';
 
 /**
  * Quick Post — one message, many destinations, now or later.
@@ -113,6 +113,25 @@ export default function QuickPostPage() {
   const [confirming, setConfirming] = useState(false);
   const [, setFlaky] = useState<string | null>(null);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+
+  /**
+   * Destinations backed by a real grant. These publish for real through
+   * /api/publish rather than through the simulated pipeline, so they are kept
+   * separate and labelled — a demo post and a post the world can see must
+   * never look the same in this UI.
+   */
+  const [live, setLive] = useState<{ channel: Channel; accountLabel: string; canPublish: boolean }[]>([]);
+  const [liveResults, setLiveResults] = useState<
+    Record<string, { ok: boolean; url?: string; error?: string; busy?: boolean }>
+  >({});
+  const [livePicked, setLivePicked] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    fetch('/api/publish')
+      .then((r) => r.json())
+      .then((d) => setLive(d.live ?? []))
+      .catch(() => setLive([]));
+  }, []);
 
   const brandFiltered = state.destinations.filter(
     (d) => state.activeBrandId === 'all' || d.brandId === state.activeBrandId || d.brandId === null
@@ -244,6 +263,27 @@ export default function QuickPostPage() {
     });
   }
 
+  /** Publish to the live, really-connected destinations. */
+  async function publishLive() {
+    for (const l of live.filter((x) => x.canPublish && livePicked.has(x.channel))) {
+      setLiveResults((r) => ({ ...r, [l.channel]: { ok: false, busy: true } }));
+      try {
+        const res = await fetch('/api/publish', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ channel: l.channel, text: body }),
+        });
+        const data = await res.json();
+        setLiveResults((r) => ({
+          ...r,
+          [l.channel]: { ok: !!data.ok, url: data.url, error: data.error },
+        }));
+      } catch (e) {
+        setLiveResults((r) => ({ ...r, [l.channel]: { ok: false, error: (e as Error).message } }));
+      }
+    }
+  }
+
   function retry(job: PublishJob) {
     dispatch({ type: 'retryJob', jobId: job.id });
     timers.current.push(setTimeout(() => runJob(job, job.attempt + 1, false), 200));
@@ -363,6 +403,70 @@ export default function QuickPostPage() {
               </div>
             </div>
             <div className="card-pad" style={{ display: 'grid', gap: 12 }}>
+              {/* Really-connected destinations, kept visually apart from the
+                  demo workspace: a post the world can see must never look the
+                  same as one that goes nowhere. */}
+              {live.length > 0 && (
+                <div className="live-block">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 7 }}>
+                    <span className="live-dot" aria-hidden />
+                    <strong style={{ fontSize: 12 }}>Live accounts</strong>
+                    <span style={{ color: 'var(--muted)', fontSize: 11 }}>
+                      these publish for real
+                    </span>
+                  </div>
+                  <div style={{ display: 'grid', gap: 5 }}>
+                    {live.map((l) => {
+                      const on = livePicked.has(l.channel);
+                      const res = liveResults[l.channel];
+                      return (
+                        <label
+                          key={l.channel}
+                          className={`dest-row ${on ? 'on' : ''} ${l.canPublish ? '' : 'blocked'}`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={on}
+                            disabled={!l.canPublish}
+                            onChange={() => {
+                              const next = new Set(livePicked);
+                              if (next.has(l.channel)) next.delete(l.channel);
+                              else next.add(l.channel);
+                              setLivePicked(next);
+                            }}
+                          />
+                          <ChannelIcon channel={l.channel} size={20} />
+                          <span style={{ minWidth: 0, flex: 1 }}>
+                            <span style={{ fontWeight: 600, fontSize: 12.5, display: 'block' }}>
+                              {l.accountLabel}
+                            </span>
+                            <span style={{ color: 'var(--muted)', fontSize: 11 }}>
+                              {CHANNEL_META[l.channel].label} · connected account
+                            </span>
+                          </span>
+                          {!l.canPublish && (
+                            <span className="pill draft" style={{ textTransform: 'none', letterSpacing: 0 }}>
+                              publishing not implemented yet
+                            </span>
+                          )}
+                          {res?.busy && <span className="pill scheduled">posting…</span>}
+                          {res && !res.busy && res.ok && (
+                            <a className="pill published" href={res.url} target="_blank" rel="noreferrer">
+                              posted ↗
+                            </a>
+                          )}
+                          {res && !res.busy && !res.ok && (
+                            <span className="pill failed" style={{ textTransform: 'none', letterSpacing: 0, maxWidth: 240, whiteSpace: 'normal' }}>
+                              {res.error}
+                            </span>
+                          )}
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               {grouped.map(([channel, dests]) => (
                 <div key={channel}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 6 }}>
@@ -436,6 +540,14 @@ export default function QuickPostPage() {
 
             <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginBottom: 10 }}>
               {readySelected.length} ready
+              {livePicked.size > 0 && (
+                <>
+                  {' · '}
+                  <span style={{ color: 'var(--st-good-text)', fontWeight: 650 }}>
+                    {livePicked.size} live
+                  </span>
+                </>
+              )}
               {blockedSelected.length > 0 && (
                 <>
                   {' · '}
@@ -450,7 +562,7 @@ export default function QuickPostPage() {
               <button
                 className="btn primary"
                 style={{ width: '100%', justifyContent: 'center' }}
-                disabled={readySelected.length === 0 || !body.trim()}
+                disabled={(readySelected.length === 0 && livePicked.size === 0) || !body.trim()}
                 onClick={() => setConfirming(true)}
               >
                 {when === 'now'
@@ -465,11 +577,27 @@ export default function QuickPostPage() {
                     ? `This posts publicly to ${readySelected.length} destinations right away.`
                     : `This schedules ${readySelected.length} posts for ${fmtDateTime(`${date}T${time}`)}.`}
                 </div>
+                {when === 'now' && livePicked.size > 0 && (
+                  <div style={{ color: 'var(--st-critical)', fontWeight: 650, marginBottom: 6 }}>
+                    {livePicked.size} of these is a live account — that post will be publicly visible
+                    and cannot be un-posted from here.
+                  </div>
+                )}
                 <div style={{ fontSize: 11.5, marginBottom: 8 }}>
                   {readySelected.map((d) => d.name).join(' · ')}
                 </div>
                 <div style={{ display: 'flex', gap: 7 }}>
-                  <button className="btn primary sm" onClick={when === 'now' ? publishNow : schedule}>
+                  <button
+                    className="btn primary sm"
+                    onClick={
+                      when === 'now'
+                        ? () => {
+                            publishNow();
+                            publishLive();
+                          }
+                        : schedule
+                    }
+                  >
                     {when === 'now' ? 'Yes, post now' : 'Yes, schedule it'}
                   </button>
                   <button className="btn sm" onClick={() => setConfirming(false)}>

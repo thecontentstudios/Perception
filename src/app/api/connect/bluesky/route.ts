@@ -25,16 +25,6 @@ interface SessionResponse {
 
 /** POST { handle, appPassword } → real session, stored encrypted. */
 export async function POST(request: Request) {
-  if (!hasEncryptionKey()) {
-    return NextResponse.json(
-      {
-        error: 'TOKEN_ENCRYPTION_KEY is not set, so the session could not be stored safely.',
-        fix: 'Run `openssl rand -base64 32` and set TOKEN_ENCRYPTION_KEY in .env.local.',
-      },
-      { status: 428 }
-    );
-  }
-
   let handle: string;
   let appPassword: string;
   try {
@@ -61,6 +51,20 @@ export async function POST(request: Request) {
         fix: 'Create one at Bluesky → Settings → App Passwords. It looks like xxxx-xxxx-xxxx-xxxx. Never use your main password.',
       },
       { status: 400 }
+    );
+  }
+
+  // Config check comes after input validation: a malformed password is
+  // malformed whatever the server config, and it's the problem the person at
+  // this screen can actually fix. The missing key is the operator's, and the
+  // setup panel already shouts about it.
+  if (!hasEncryptionKey()) {
+    return NextResponse.json(
+      {
+        error: 'TOKEN_ENCRYPTION_KEY is not set, so the session could not be stored safely.',
+        fix: 'Run `openssl rand -base64 32` and set TOKEN_ENCRYPTION_KEY in .env.local.',
+      },
+      { status: 428 }
     );
   }
 

@@ -2035,3 +2035,19 @@ code.mono {
   display: grid;
   gap: 5px;
 }
+
+/* Live (really connected) accounts, held apart from the demo workspace. */
+.live-block {
+  border: 1px solid var(--st-good);
+  background: rgba(12, 163, 12, 0.04);
+  border-radius: var(--radius-sm);
+  padding: 10px 11px;
+}
+
+.live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--st-good);
+  box-shadow: 0 0 0 3px rgba(12, 163, 12, 0.18);
+}
