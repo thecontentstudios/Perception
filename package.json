@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "description": "Perception — a campaign operating system for small businesses. One campaign, everywhere your customers are.",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
