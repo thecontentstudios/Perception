@@ -2,6 +2,8 @@
 
 import { useState } from 'react';
 import { MediaThumb, SevIcon } from '@/components/ui';
+import { Collapsible, CollapseAll } from '@/components/Collapsible';
+import { BRANDS } from '@/lib/store';
 import { useApp } from '@/lib/store';
 
 export default function MediaPage() {
@@ -42,8 +44,26 @@ export default function MediaPage() {
         </div>
       )}
 
-      <div className="grid cols-4">
-        {assets.map((m) => (
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+        <CollapseAll prefix="media." count={BRANDS.length} />
+      </div>
+
+      {/* Grouped by business: 14 assets in one flat grid is a wall, and the
+          question people actually ask is "what do I have for this business?" */}
+      <div style={{ display: 'grid', gap: 10 }}>
+        {BRANDS.filter((b) => assets.some((m) => m.brandId === b.id)).map((b) => {
+          const owned = assets.filter((m) => m.brandId === b.id);
+          const noAlt = owned.filter((m) => m.kind === 'image' && !m.altText).length;
+          return (
+            <Collapsible
+              key={b.id}
+              id={`media.${b.id}`}
+              title={b.name}
+              badge={<span className="pill neutral">{owned.length}</span>}
+              summary={`${owned.length} assets${noAlt > 0 ? ` · ${noAlt} missing alt text` : ' · all have alt text'}`}
+            >
+              <div className="grid cols-4">
+                {owned.map((m) => (
           <div key={m.id} className="card card-pad" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <MediaThumb asset={m} ratio />
             <div>
@@ -100,7 +120,11 @@ export default function MediaPage() {
               </div>
             )}
           </div>
-        ))}
+                ))}
+              </div>
+            </Collapsible>
+          );
+        })}
       </div>
     </div>
   );

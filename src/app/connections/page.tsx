@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { ConnectFlow } from '@/components/ConnectFlow';
 import { LiveConnect } from '@/components/LiveConnect';
+import { Collapsible, CollapseAll } from '@/components/Collapsible';
 import { connectSpecFor } from '@/lib/connect-specs';
 import { BRANDS } from '@/lib/store';
 import { CHANNEL_META, ChannelIcon } from '@/lib/channels';
@@ -181,29 +182,51 @@ export default function ConnectionsPage() {
         </div>
       </div>
 
-      {attention.length > 0 && (
-        <>
-          <div className="section-label">Needs attention</div>
-          <div className="grid cols-3" style={{ marginBottom: 6 }}>
-            {attention.map((a) => (
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+        <CollapseAll prefix="conn." count={3} />
+      </div>
+
+      <div style={{ display: 'grid', gap: 10 }}>
+        {attention.length > 0 && (
+          <Collapsible
+            id="conn.attention"
+            title="Needs attention"
+            badge={<span className="pill failed">{attention.length}</span>}
+            summary={attention.map((a) => CHANNEL_META[a.channel].label).join(', ')}
+          >
+            <div className="grid cols-3">
+              {attention.map((a) => (
+                <AccountCard key={a.id} account={a} onConnect={setConnecting} />
+              ))}
+            </div>
+          </Collapsible>
+        )}
+
+        <Collapsible
+          id="conn.connected"
+          title="Connected"
+          badge={<span className="pill published">{healthy.length}</span>}
+          summary={`${healthy.length} authorizations · ${state.destinations.filter((d) => d.enabled).length} destinations enabled`}
+        >
+          <div className="grid cols-3">
+            {healthy.map((a) => (
               <AccountCard key={a.id} account={a} onConnect={setConnecting} />
             ))}
           </div>
-        </>
-      )}
+        </Collapsible>
 
-      <div className="section-label">Connected</div>
-      <div className="grid cols-3" style={{ marginBottom: 6 }}>
-        {healthy.map((a) => (
-          <AccountCard key={a.id} account={a} onConnect={setConnecting} />
-        ))}
-      </div>
-
-      <div className="section-label">Available destinations</div>
-      <div className="grid cols-3">
-        {available.map((a) => (
-          <AccountCard key={a.id} account={a} onConnect={setConnecting} />
-        ))}
+        <Collapsible
+          id="conn.available"
+          title="Available destinations"
+          badge={<span className="pill draft">{available.length}</span>}
+          summary={`${available.length} platforms you haven't connected yet`}
+        >
+          <div className="grid cols-3">
+            {available.map((a) => (
+              <AccountCard key={a.id} account={a} onConnect={setConnecting} />
+            ))}
+          </div>
+        </Collapsible>
       </div>
 
       {connecting && <ConnectFlow channel={connecting} onClose={() => setConnecting(null)} />}

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { PlatformPreview } from '@/components/PlatformPreview';
+import { Collapsible, CollapseAll } from '@/components/Collapsible';
 import { MediaThumb, SevIcon, WarningsList, fmtNum } from '@/components/ui';
 import { CHANNEL_META, ChannelIcon } from '@/lib/channels';
 import { addDays, fmtDateTime } from '@/lib/dates';
@@ -391,6 +392,7 @@ export default function QuickPostPage() {
               <h3>Where should it go?</h3>
               <span className="card-sub">{selected.length} selected</span>
               <div className="right">
+                <CollapseAll prefix="post." count={grouped.length} />
                 <button
                   className="btn sm"
                   onClick={() => {
@@ -467,12 +469,30 @@ export default function QuickPostPage() {
                 </div>
               )}
 
-              {grouped.map(([channel, dests]) => (
-                <div key={channel}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 6 }}>
-                    <ChannelIcon channel={channel as PublishDestination['channel']} size={15} />
-                    <strong style={{ fontSize: 12 }}>{CHANNEL_META[channel as PublishDestination['channel']].label}</strong>
-                  </div>
+              {grouped.map(([channel, dests]) => {
+                const ch = channel as PublishDestination['channel'];
+                const pickedHere = dests.filter((d) => picked.has(d.id)).length;
+                const readyHere = dests.filter((d) => destinationBlocker(d) === null).length;
+                return (
+                <Collapsible
+                  key={channel}
+                  id={`post.${channel}`}
+                  className="plain"
+                  title={
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+                      <ChannelIcon channel={ch} size={15} />
+                      {CHANNEL_META[ch].label}
+                    </span>
+                  }
+                  badge={
+                    pickedHere > 0 ? (
+                      <span className="pill scheduled">{pickedHere} selected</span>
+                    ) : (
+                      <span className="pill neutral">{readyHere}/{dests.length}</span>
+                    )
+                  }
+                  summary={`${readyHere} of ${dests.length} ready`}
+                >
                   <div style={{ display: 'grid', gap: 5 }}>
                     {dests.map((d) => {
                       const blocker = destinationBlocker(d);
@@ -512,8 +532,9 @@ export default function QuickPostPage() {
                       );
                     })}
                   </div>
-                </div>
-              ))}
+                </Collapsible>
+                );
+              })}
             </div>
           </div>
         </div>

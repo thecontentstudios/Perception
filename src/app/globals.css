@@ -2051,3 +2051,109 @@ code.mono {
   background: var(--st-good);
   box-shadow: 0 0 0 3px rgba(12, 163, 12, 0.18);
 }
+
+/* ---------------------------------------------------------------- collapsible */
+
+.collapsible {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.collapsible-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px 0 0;
+}
+
+.collapsible-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  padding: 12px 14px;
+  text-align: left;
+  color: inherit;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.collapsible-toggle:hover {
+  background: var(--surface-2);
+}
+
+.collapsible-caret {
+  flex: none;
+  color: var(--muted);
+  transition: transform var(--dur) var(--ease);
+}
+
+.collapsible.open .collapsible-caret {
+  transform: rotate(90deg);
+}
+
+.collapsible-title {
+  font-weight: 650;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+/* The whole point: a closed section still reports what's inside it. */
+.collapsible-summary {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 500;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.collapsible-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex: none;
+}
+
+/* 0fr → 1fr animates height with no JS measurement, and stays correct if the
+   content reflows mid-transition. */
+.collapsible-region {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows var(--dur-slow) var(--ease);
+}
+
+.collapsible.closed .collapsible-region {
+  grid-template-rows: 0fr;
+}
+
+.collapsible-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.collapsible.open .collapsible-inner {
+  padding: 0 14px 14px;
+}
+
+/* Nested collapsibles (a channel group inside a card) shed the card chrome. */
+.collapsible.plain {
+  border: none;
+  box-shadow: none;
+  background: transparent;
+  border-radius: 0;
+}
+
+.collapsible.plain .collapsible-toggle {
+  padding: 6px 4px;
+}
+
+.collapsible.plain.open .collapsible-inner {
+  padding: 0 0 8px;
+}

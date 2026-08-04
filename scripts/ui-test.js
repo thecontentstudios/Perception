@@ -24,6 +24,15 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
 
+  // Layout preferences persist by design, so a previous run must not leak
+  // into this one (collapsed groups would hide the elements later checks click).
+  await page.goto('http://localhost:3000/', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => {
+    Object.keys(localStorage)
+      .filter((k) => k.startsWith('perception.'))
+      .forEach((k) => localStorage.removeItem(k));
+  });
+
   console.log('\n== 1. Sectioned nav ==');
   await page.goto('http://localhost:3000/calendar', { waitUntil: 'networkidle' });
   const sections = await page.$$eval('.nav-section-label', (els) => els.map((e) => e.textContent));
@@ -304,6 +313,75 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
     data: { channel: 'bluesky', text: '   ' },
   });
   empty.status() === 400 ? ok('empty message rejected') : bad('empty message not rejected');
+
+  console.log('\n== 7k. Collapsible sections ==');
+  for (const [route, prefix, minSections] of [['/connections','conn.',3], ['/media','media.',3], ['/post','post.',4]]) {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto('http://localhost:3000' + route, { waitUntil: 'networkidle' });
+    await page.waitForTimeout(500);
+    const sections = await page.$$('.collapsible-toggle');
+    sections.length >= minSections
+      ? ok(`${route}: ${sections.length} collapsible sections`)
+      : bad(`${route}: only ${sections.length} sections, expected >= ${minSections}`);
+
+    const before = await page.evaluate(() => document.documentElement.scrollHeight);
+    const all = await page.$('button:has-text("Collapse all")');
+    if (all) await all.click();
+    else {
+      // Re-query each time: collapsing reflows the page and a stale handle
+      // ends up under another element.
+      for (let i = 0; i < sections.length; i++) {
+        const open = await page.$('.collapsible.open .collapsible-toggle');
+        if (!open) break;
+        await open.click();
+        await page.waitForTimeout(320);
+      }
+    }
+    await page.waitForTimeout(700);
+    const after = await page.evaluate(() => document.documentElement.scrollHeight);
+    const shrink = Math.round((1 - after / before) * 100);
+    shrink >= 25
+      ? ok(`${route}: collapsing shortens the page ${shrink}%`)
+      : bad(`${route}: collapse only saved ${shrink}% (${before} -> ${after})`);
+
+    // A collapsed section must still report what is inside it.
+    const summaries = await page.$$eval('.collapsible-summary', (e) =>
+      e.map((x) => x.textContent.trim()).filter(Boolean)
+    );
+    summaries.length > 0
+      ? ok(`${route}: closed sections show summaries ("${summaries[0].slice(0, 40)}")`)
+      : bad(`${route}: collapsed sections hide their contents with no summary`);
+
+    // Collapsed content must be hidden from screen readers too.
+    const hidden = await page.$$eval('.collapsible.closed .collapsible-region', (e) =>
+      e.every((x) => x.getAttribute('aria-hidden') === 'true')
+    );
+    hidden ? ok(`${route}: collapsed regions are aria-hidden`) : bad(`${route}: collapsed content still exposed to AT`);
+
+    const expanded = await page.$$eval('.collapsible.closed .collapsible-toggle', (e) =>
+      e.every((x) => x.getAttribute('aria-expanded') === 'false')
+    );
+    expanded ? ok(`${route}: aria-expanded tracks state`) : bad(`${route}: aria-expanded wrong`);
+
+    // Tab must not walk into a collapsed section.
+    const inert = await page.$$eval('.collapsible.closed .collapsible-region', (e) =>
+      e.every((x) => x.hasAttribute('inert'))
+    );
+    inert ? ok(`${route}: collapsed content removed from focus order`) : bad(`${route}: collapsed content still focusable`);
+  }
+
+  // State must survive a reload.
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForTimeout(600);
+  const stillClosed = await page.$$eval('.collapsible.closed', (e) => e.length);
+  stillClosed > 0 ? ok('collapse state persists across reload') : bad('collapse state lost on reload');
+  const expandAll = await page.$('button:has-text("Expand all")');
+  if (expandAll) {
+    await expandAll.click();
+    await page.waitForTimeout(600);
+    const open = await page.$$eval('.collapsible.open', (e) => e.length);
+    open > 0 ? ok('expand all reopens sections') : bad('expand all did nothing');
+  }
 
   console.log('\n== 8. Reduced motion ==');
   const ctx2 = await browser.newContext({ viewport: { width: 1280, height: 800 }, reducedMotion: 'reduce' });

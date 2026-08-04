@@ -32,8 +32,19 @@ export function usePersisted<T>(key: string, initial: T): [T, (v: T) => void] {
   const [value, setValue] = useState<T>(initial);
 
   useEffect(() => {
-    const stored = read<T>(key);
-    if (stored !== null) setValue(stored);
+    const sync = () => {
+      const stored = read<T>(key);
+      if (stored !== null) setValue(stored);
+    };
+    sync();
+    // 'storage' only fires in *other* tabs, so a same-tab custom event is
+    // needed for bulk operations (collapse all) to reach mounted components.
+    window.addEventListener('perception:collapse-sync', sync);
+    window.addEventListener('storage', sync);
+    return () => {
+      window.removeEventListener('perception:collapse-sync', sync);
+      window.removeEventListener('storage', sync);
+    };
   }, [key]);
 
   const set = useCallback(
