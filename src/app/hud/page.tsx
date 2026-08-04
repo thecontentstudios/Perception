@@ -66,20 +66,56 @@ function SurfaceIcon({ surface, size = 18 }: { surface: AdSurface; size?: number
 
 const KIND_FILTERS: (SurfaceKind | 'all')[] = ['all', 'social', 'video', 'local', 'search', 'messaging', 'owned'];
 
+type SortKey = 'name' | 'organic' | 'paid' | 'status' | 'fit';
+
+/** Status sort order, most actionable first: fix it, then use it, then add it. */
+const STATUS_ORDER: SurfaceStatus[] = ['needs_reconnect', 'connected', 'available', 'ads_only'];
+
 export default function HudPage() {
   const { state, visibleCampaigns, brandById } = useApp();
   const [kind, setKind] = useState<SurfaceKind | 'all'>('all');
+  const [sort, setSort] = useState<SortKey>('fit');
+  const [desc, setDesc] = useState(true);
 
   const activeBrand = state.activeBrandId === 'all' ? null : BRANDS.find((b) => b.id === state.activeBrandId);
   const industry: Industry | 'all' = activeBrand?.industry ?? 'all';
 
-  const rows = useMemo(
-    () =>
-      SURFACES.filter((s) => kind === 'all' || s.kind === kind)
-        .slice()
-        .sort((a, b) => fitFor(b, industry) - fitFor(a, industry) || a.name.localeCompare(b.name)),
-    [kind, industry]
-  );
+  const rows = useMemo(() => {
+    const dir = desc ? -1 : 1;
+    const value = (s: (typeof SURFACES)[number]) => {
+      switch (sort) {
+        case 'name':
+          return s.name.toLowerCase();
+        case 'organic':
+          return s.organic ? 1 : 0;
+        case 'paid':
+          return s.paid ? 1 : 0;
+        case 'status':
+          return STATUS_ORDER.indexOf(surfaceStatus(s, state.accounts));
+        case 'fit':
+        default:
+          return fitFor(s, industry);
+      }
+    };
+    return SURFACES.filter((s) => kind === 'all' || s.kind === kind)
+      .slice()
+      .sort((a, b) => {
+        const av = value(a);
+        const bv = value(b);
+        if (av < bv) return dir;
+        if (av > bv) return -dir;
+        return a.name.localeCompare(b.name); // stable tiebreak
+      });
+  }, [kind, industry, sort, desc, state.accounts]);
+
+  /** Clicking a header sorts by it; clicking the active header flips direction. */
+  const sortBy = (key: SortKey) => {
+    if (key === sort) setDesc(!desc);
+    else {
+      setSort(key);
+      setDesc(key !== 'name');
+    }
+  };
 
   const connectedCount = SURFACES.filter((s) => surfaceStatus(s, state.accounts) === 'connected').length;
   const liveOrganic = state.variations.filter((v) => v.status === 'published').length;
@@ -219,17 +255,37 @@ export default function HudPage() {
             </div>
           </div>
         </div>
-        <div style={{ overflowX: 'auto' }}>
+        <div className="table-scroll">
           <table className="table matrix">
             <thead>
               <tr>
-                <th>Surface</th>
-                <th>Organic</th>
-                <th>Paid</th>
-                <th>Best for</th>
-                <th>Fit</th>
-                <th>Status</th>
-                <th>Reality check</th>
+                {(
+                  [
+                    ['Surface', 'name'],
+                    ['Organic', 'organic'],
+                    ['Paid', 'paid'],
+                    ['Best for', null],
+                    ['Fit', 'fit'],
+                    ['Status', 'status'],
+                    ['Reality check', null],
+                  ] as [string, SortKey | null][]
+                ).map(([label, key]) =>
+                  key ? (
+                    <th
+                      key={label}
+                      aria-sort={sort === key ? (desc ? 'descending' : 'ascending') : 'none'}
+                    >
+                      <button className="th-sort" onClick={() => sortBy(key)}>
+                        {label}
+                        <span className={`sort-caret ${sort === key ? 'on' : ''}`} aria-hidden>
+                          {sort === key ? (desc ? '▼' : '▲') : '▾'}
+                        </span>
+                      </button>
+                    </th>
+                  ) : (
+                    <th key={label}>{label}</th>
+                  )
+                )}
               </tr>
             </thead>
             <tbody>

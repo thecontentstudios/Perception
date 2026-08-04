@@ -122,6 +122,31 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
   );
   spill === 0 ? ok('no card titles overflow their card') : bad(spill + ' card titles overflow');
 
+  console.log('\n== 7c. HUD matrix: sticky + sortable ==');
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await page.goto('http://localhost:3000/hud', { waitUntil: 'networkidle' });
+  const sticky = await page.$eval('.table-scroll thead th', (e) => getComputedStyle(e).position);
+  sticky === 'sticky' ? ok('matrix header is sticky') : bad('header not sticky: ' + sticky);
+  const firstByFit = await page.$eval('.matrix tbody tr .cell-name', (e) => e.textContent.trim());
+  await page.click('.matrix thead th:first-child .th-sort');   // sort by name asc
+  await page.waitForTimeout(250);
+  const firstByName = await page.$eval('.matrix tbody tr .cell-name', (e) => e.textContent.trim());
+  console.log(`  fit-sorted "${firstByFit}" -> name-sorted "${firstByName}"`);
+  firstByFit !== firstByName ? ok('clicking a header re-sorts') : bad('sort did not change order');
+  await page.click('.matrix thead th:first-child .th-sort');   // flip to desc
+  await page.waitForTimeout(250);
+  const flipped = await page.$eval('.matrix tbody tr .cell-name', (e) => e.textContent.trim());
+  flipped !== firstByName ? ok('clicking again flips direction') : bad('direction did not flip');
+  const ariaSort = await page.$eval('.matrix thead th:first-child', (e) => e.getAttribute('aria-sort'));
+  ariaSort === 'descending' ? ok('aria-sort reflects state') : bad('aria-sort wrong: ' + ariaSort);
+
+  console.log('\n== 7d. Auto-rail on narrow screens ==');
+  await page.setViewportSize({ width: 900, height: 800 });
+  await page.goto('http://localhost:3000/calendar', { waitUntil: 'networkidle' });
+  await page.waitForTimeout(300);
+  const narrowNav = await page.$eval('.nav', (e) => e.getBoundingClientRect().width);
+  narrowNav < 100 ? ok('nav auto-rails at 900px (' + narrowNav + 'px)') : bad('nav still wide at 900px: ' + narrowNav);
+
   console.log('\n== 8. Reduced motion ==');
   const ctx2 = await browser.newContext({ viewport: { width: 1280, height: 800 }, reducedMotion: 'reduce' });
   const p2 = await ctx2.newPage();

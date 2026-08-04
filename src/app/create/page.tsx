@@ -167,7 +167,7 @@ export default function CreatePage() {
       )}
 
       {!done && step === 0 && (
-        <div className="card card-pad">
+        <div className="card card-pad step-panel" key="step-0">
           <div className="grid cols-2">
             <div>
               <div className="field">
@@ -249,7 +249,7 @@ export default function CreatePage() {
       )}
 
       {!done && step === 1 && (
-        <div className="card card-pad">
+        <div className="card card-pad step-panel" key="step-1">
           <div className="grid cols-2">
             <div>
               <div className="field">
@@ -293,7 +293,7 @@ export default function CreatePage() {
       )}
 
       {!done && step === 2 && (
-        <div className="card card-pad">
+        <div className="card card-pad step-panel" key="step-2">
           <div className="field">
             <label>Where should this campaign go?</label>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
@@ -374,7 +374,7 @@ export default function CreatePage() {
       )}
 
       {!done && step === 3 && generated && (
-        <div>
+        <div className="step-panel" key="step-3">
           <div className="card card-pad" style={{ marginBottom: 14 }}>
             <div className="field" style={{ marginBottom: 0 }}>
               <label htmlFor="c-shared">Shared campaign message</label>
@@ -433,7 +433,7 @@ export default function CreatePage() {
       )}
 
       {!done && step === 4 && generated && (
-        <div className="card card-pad">
+        <div className="card card-pad step-panel" key="step-4">
           {blockedCount > 0 && (
             <div className="notice info" style={{ marginBottom: 12 }}>
               {blockedCount} draft{blockedCount > 1 ? 's' : ''} still {blockedCount > 1 ? 'have' : 'has'} blocking checks (connections, footers, media). You can
