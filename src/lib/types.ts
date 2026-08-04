@@ -23,6 +23,14 @@ export type Channel =
   | 'tiktok'
   | 'youtube'
   | 'google_business'
+  | 'x'
+  | 'threads'
+  | 'bluesky'
+  | 'pinterest'
+  | 'reddit'
+  | 'nextdoor'
+  | 'snapchat'
+  | 'whatsapp'
   | 'email'
   | 'sms'
   | 'website';
@@ -33,13 +41,15 @@ export type ContentFormat =
   | 'story'
   | 'video' // long-form (YouTube)
   | 'update' // Google Business Profile local post
+  | 'pin' // Pinterest
+  | 'message' // WhatsApp broadcast / template message
   | 'email'
   | 'sms'
   | 'banner' // website banner
   | 'blog'
   | 'landing_page';
 
-export type AspectRatio = '1:1' | '4:5' | '4:3' | '16:9' | '9:16' | '1.91:1' | '3:2';
+export type AspectRatio = '1:1' | '4:5' | '4:3' | '2:3' | '16:9' | '9:16' | '1.91:1' | '3:2';
 
 // ---------------------------------------------------------------------------
 // Workspace: organization, brands, users

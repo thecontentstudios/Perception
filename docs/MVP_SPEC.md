@@ -4,7 +4,7 @@
 
 **Central idea:** Create one campaign, adapt it to every channel, approve it once, and manage the results from one place. The campaign — not the individual post — is the product's central object.
 
-This document turns the product blueprint into a build order. The clickable prototype in this repository demonstrates every P0 flow with demo data; the production milestones below replace the simulated parts with real services.
+This document turns the product blueprint into a build order. The clickable prototype in this repository demonstrates every P0 flow with demo data; the production milestones below replace the simulated parts with real services. The loop-by-loop execution plan lives in [`ROADMAP.md`](ROADMAP.md).
 
 ---
 
@@ -32,15 +32,19 @@ This document turns the product blueprint into a build order. The clickable prot
 - Automated welcome sequence + click-based follow-up emails.
 - Conversion ingestion from website events (form, booking, trial, purchase) feeding campaign dashboards.
 - Two-factor auth enforcement options, full audit-log UI, export & deletion tools.
+- **Advertising & Social Understanding HUD v2**: the HUD (v1 ships in this prototype — 21-surface landscape, organic + paid capability, cost models, per-industry fit, coverage gaps, honest API notes) gains read-only spend + lead sync from ads-only networks (Google Ads, Local Services Ads, Microsoft Ads, Yelp Ads) so paid and organic results sit side by side.
 - Measured North-star ops metric: **successful-publication rate ≥ 99%** (publishes succeeded / publishes attempted, excluding user-cancelled).
 
 ## P2 — expansion
 
-- TikTok (Content Posting API) and YouTube (Data API) once app audits clear; Pinterest, Threads, Bluesky (AT Protocol), X.
+The full surface roster is modeled today (adapters + capability sheets + HUD fit scoring for all 17 posting channels and 4 ads-only networks); expansion is sequenced by API reality, not ambition — see the tier table in [`ROADMAP.md`](ROADMAP.md):
+
+- **Tier 2 (cheap wins):** Bluesky (open protocol, no review), Threads (rides the Meta app), Pinterest, X (once paid API-tier economics are priced), Reddit.
+- **Tier 3 (gated):** TikTok and YouTube (content/compliance audits), Snapchat (ads-first), WhatsApp Business (template messaging), SMS (10DLC + structural opt-out), Nextdoor (partner program — assisted-manual publishing ships regardless).
+- **Ads-only surfaces:** read-only spend + lead sync from Google Ads, Google Local Services Ads, Microsoft Ads, and Yelp Ads into the HUD and campaign attribution.
 - Shopify/WooCommerce/Webflow/Wix/Squarespace; webhooks + Zapier-style automation recipes.
-- SMS with 10DLC registration and structural opt-out enforcement.
 - Recommendations engine ("email converts best — send the last call to Past Clients").
-- Paid-ad management, full CRM, and broad social listening remain **out of scope** — the strategy is three excellent connectors, email, and a brilliant calendar before breadth.
+- **Full paid-ad management**, full CRM, and broad social listening remain **out of scope** — the HUD tells owners where paid money works; it does not replace Ads Manager. The strategy stays three excellent connectors, email, and a brilliant calendar before breadth.
 
 ## Explicit non-goals for MVP
 

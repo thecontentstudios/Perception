@@ -6,6 +6,16 @@ import { linkedinAdapter } from './linkedin';
 import { googleBusinessAdapter } from './google-business';
 import { emailAdapter } from './email';
 import { smsAdapter, tiktokAdapter, websiteAdapter, youtubeAdapter } from './planned';
+import {
+  blueskyAdapter,
+  nextdoorAdapter,
+  pinterestAdapter,
+  redditAdapter,
+  snapchatAdapter,
+  threadsAdapter,
+  whatsappAdapter,
+  xAdapter,
+} from './expansion';
 
 /**
  * One registry, one contract. Adding a destination = writing an adapter and
@@ -20,6 +30,14 @@ export const CONNECTORS: Record<Channel, ConnectorAdapter> = {
   email: emailAdapter,
   tiktok: tiktokAdapter,
   youtube: youtubeAdapter,
+  x: xAdapter,
+  threads: threadsAdapter,
+  bluesky: blueskyAdapter,
+  pinterest: pinterestAdapter,
+  reddit: redditAdapter,
+  nextdoor: nextdoorAdapter,
+  snapchat: snapchatAdapter,
+  whatsapp: whatsappAdapter,
   sms: smsAdapter,
   website: websiteAdapter,
 };

@@ -16,6 +16,14 @@ export const CHANNEL_META: Record<
   tiktok: { label: 'TikTok', short: 'TT', color: '#1f2937' },
   youtube: { label: 'YouTube', short: 'YT', color: '#e11d48' },
   google_business: { label: 'Google Business', short: 'GBP', color: '#4285f4' },
+  x: { label: 'X (Twitter)', short: 'X', color: '#000000' },
+  threads: { label: 'Threads', short: 'TH', color: '#33322e' },
+  bluesky: { label: 'Bluesky', short: 'BSK', color: '#1185fe' },
+  pinterest: { label: 'Pinterest', short: 'PIN', color: '#c8102e' },
+  reddit: { label: 'Reddit', short: 'RDT', color: '#ff4500' },
+  nextdoor: { label: 'Nextdoor', short: 'ND', color: '#5b8c1a' },
+  snapchat: { label: 'Snapchat', short: 'SC', color: '#a16207' },
+  whatsapp: { label: 'WhatsApp', short: 'WA', color: '#1da851' },
   email: { label: 'Email', short: 'EM', color: '#8b5cf6' },
   sms: { label: 'SMS', short: 'SMS', color: '#10b981' },
   website: { label: 'Website', short: 'WEB', color: '#64748b' },
@@ -78,6 +86,59 @@ function Glyph({ channel }: { channel: Channel }) {
       return (
         <g fill="none" stroke={stroke} strokeWidth="1.8" strokeLinejoin="round">
           <path d="M4.5 6.5h15v9.5h-8l-4 3.5v-3.5h-3z" />
+        </g>
+      );
+    case 'x':
+      return (
+        <g stroke={stroke} strokeWidth="2.2" strokeLinecap="round">
+          <path d="M6 6l12 12M18 6L6 18" />
+        </g>
+      );
+    case 'threads':
+      return (
+        <text x="12" y="16.5" textAnchor="middle" fontSize="14" fontWeight="700" fill={stroke} fontFamily="Arial, sans-serif">
+          @
+        </text>
+      );
+    case 'bluesky':
+      return (
+        <g fill="none" stroke={stroke} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M12 10.5C10.2 7 6.5 5 4.8 5.8c-.9 3.2.8 6.7 7.2 8.2M12 10.5C13.8 7 17.5 5 19.2 5.8c.9 3.2-.8 6.7-7.2 8.2M12 14v4.5" />
+        </g>
+      );
+    case 'pinterest':
+      return (
+        <text x="12" y="17" textAnchor="middle" fontSize="14" fontWeight="700" fill={stroke} fontFamily="Georgia, serif">
+          P
+        </text>
+      );
+    case 'reddit':
+      return (
+        <text x="12" y="17" textAnchor="middle" fontSize="15" fontWeight="700" fill={stroke} fontFamily="Arial, sans-serif">
+          r
+        </text>
+      );
+    case 'nextdoor':
+      return (
+        <g fill="none" stroke={stroke} strokeWidth="1.8" strokeLinejoin="round">
+          <path d="M4.5 11.5L12 5l7.5 6.5M6.8 10v8.5h10.4V10" />
+        </g>
+      );
+    case 'snapchat':
+      return (
+        <path
+          d="M7 18v-7.5a5 5 0 0 1 10 0V18l-2.5-1.4L12 18l-2.5-1.4z"
+          fill="none"
+          stroke={stroke}
+          strokeWidth="1.8"
+          strokeLinejoin="round"
+        />
+      );
+    case 'whatsapp':
+      return (
+        <g fill="none" stroke={stroke} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M12 4.5a7.2 7.2 0 0 1 0 14.4c-1.2 0-2.4-.3-3.4-.9L5 19l1-3.4a7.2 7.2 0 0 1 6-11.1z" />
+          <path d="M9.6 9.4c.3 2.2 2.6 4.4 4.8 4.8l1-1.3-1.8-1.1-.9.6c-.8-.5-1.4-1.1-1.8-1.9l.6-.9-1.1-1.7z" />
         </g>
       );
     case 'website':

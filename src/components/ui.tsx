@@ -91,6 +91,7 @@ const RATIO_PAD: Record<MediaAsset['aspectRatio'], number> = {
   '1:1': 100,
   '4:5': 125,
   '4:3': 75,
+  '2:3': 150,
   '3:2': 66.7,
   '16:9': 56.25,
   '9:16': 177.8,

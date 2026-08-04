@@ -84,12 +84,12 @@ export function PlatformPreview({
     );
   }
 
-  if (v.channel === 'sms') {
+  if (v.channel === 'sms' || v.channel === 'whatsapp') {
     return (
       <div className="preview-frame" style={{ padding: 14, background: 'var(--surface-2)' }}>
         <div
           style={{
-            background: '#fff',
+            background: v.channel === 'whatsapp' ? '#e7fbdf' : '#fff',
             border: '1px solid var(--hairline)',
             borderRadius: '14px 14px 14px 4px',
             padding: '9px 12px',
@@ -99,7 +99,36 @@ export function PlatformPreview({
         >
           {v.body}
         </div>
-        <div style={{ color: 'var(--muted)', fontSize: 10.5, marginTop: 6 }}>{brand.name} · SMS</div>
+        <div style={{ color: 'var(--muted)', fontSize: 10.5, marginTop: 6 }}>
+          {brand.name} · {v.channel === 'whatsapp' ? 'WhatsApp Business (template message)' : 'SMS'}
+        </div>
+      </div>
+    );
+  }
+
+  // Short-form feeds: no CTA button exists organically — the link rides in the text.
+  if (v.channel === 'x' || v.channel === 'threads' || v.channel === 'bluesky') {
+    return (
+      <div className="preview-frame">
+        <div className="pv-head">
+          <BrandAvatar brand={brand} size={26} />
+          <div>
+            <div className="pv-name">{brand.name}</div>
+            <div className="pv-sub">{handleFor(brand)} · now</div>
+          </div>
+          <span style={{ marginLeft: 'auto' }}>
+            <ChannelIcon channel={v.channel} size={16} />
+          </span>
+        </div>
+        <div className="pv-body">
+          {v.body}
+          {v.cta && <div style={{ color: '#1c5cab', marginTop: 6 }}>{v.cta.url}</div>}
+        </div>
+        {media && <MediaThumb asset={media} ratio />}
+        <ActionRow items={v.channel === 'x' ? ['💬 Reply', '↻ Repost', '♥ Like', '⌁ Bookmark'] : ['♥ Like', '💬 Reply', '↻ Repost', '➤ Share']} />
+        <div className="pv-footer">
+          {v.body.length}/{v.channel === 'x' ? 280 : v.channel === 'threads' ? 500 : 300} characters
+        </div>
       </div>
     );
   }

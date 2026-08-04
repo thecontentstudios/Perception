@@ -32,8 +32,24 @@ same capability sheet that drives validation renders the Connections screen.
 | Website | WordPress REST / Shopify Admin / webhooks | 1 | banner, blog, landing page | ✔ | ✔ | ✔ | ✔ | ✖ | Conversion snippet feeds analytics |
 | TikTok | Content Posting API | 2 | video (9:16, ≤10 min) | ✖ | ✖ | ✖ | ✔ | ✔ | **Unaudited apps limited to private/draft uploads — audit early** |
 | YouTube | Data API v3 | 2 | video, short | ✔ | ✔ | ✔ | ✔ | ✔ | **Uploads from unaudited projects locked private; quota cost high** |
-| SMS | Twilio or similar | 2 | sms | ✔ | ✖ | ✖ | ✔ | ✔ | 10DLC registration; consent + STOP language required |
-| Pinterest / Threads / Bluesky / X | official APIs (Bluesky = AT Protocol) | 2 | varies | varies | varies | varies | varies | varies | Scoped per-platform during expansion |
+| X (Twitter) | X API v2 | 2 | post (280 chars, ≤2:20 video) | ✖ | ✖ | ✔ | ✔ | ✔ | **Posting requires a paid API tier — price it before committing** |
+| Threads | Threads API (Meta) | 2 | post (500 chars, 1 tag) | ✖ | ✖ | ✔ | ✔ | ✔ | GA API; rides the same Meta app + review |
+| Bluesky | AT Protocol | 2 | post (300 chars) | ✖ | ✖ | ✔ | ✖ | ✔ | Open protocol, **no review at all** — easiest connector to ship; no ads product |
+| Pinterest | Pinterest API v5 | 2 | pin (2:3 best) | ✖ | ✔ | ✔ | ✔ | ✖ | Long content half-life; every Pin needs a destination link (preflight enforces) |
+| Reddit | Reddit Data API | 2 | post | ✖ | ✔ | ✔ | ✖ | ✔ | Per-subreddit self-promotion rules; hashtags flagged as spam by preflight |
+| Nextdoor | Partner program | 3 | post | ✖ | ✖ | ✖ | ✖ | ✖ | **Posting API partner-gated — assisted manual publishing until access lands**; Nextdoor Ads open |
+| Snapchat | Snap Marketing API / Public Profiles | 3 | story (9:16, ≤60s) | ✖ | ✖ | ✖ | ✔ | ✖ | Organic limited to approved profiles; ads are the dependable path |
+| WhatsApp Business | Cloud API (Meta) | 3 | template message | ✔ | ✖ | ✖ | ✔ | ✔ | Pre-approved templates + opt-in required; opt-out enforced by preflight |
+| SMS | Twilio or similar | 3 | sms | ✔ | ✖ | ✖ | ✔ | ✔ | 10DLC registration; consent + STOP language required |
+
+### Ads-only surfaces (no posting feed — HUD spend/lead sync)
+
+| Network | Product | Cost model | Note |
+|---------|---------|-----------|------|
+| Google Ads (Search) | Google Ads API | CPC | Intent capture; campaign spend + conversions sync read-only into the HUD |
+| Google Local Services Ads | LSA program | per-lead | "Google Guaranteed" badge; home-services categories; business verification required |
+| Microsoft Ads (Bing) | Microsoft Advertising API | CPC | Imports Google campaigns; cheaper CPCs, older/desktop audience |
+| Yelp Ads | Yelp Ads program | CPC | Placement at the moment of local comparison; reviews do the selling |
 
 **Platform approval work starts in Phase 1 (product definition), not after the
 interface is finished** — Meta App Review, LinkedIn MDP access, TikTok

@@ -53,6 +53,14 @@ const POST_TIME: Record<Channel, string> = {
   website: '08:00',
   tiktok: '17:00',
   youtube: '15:00',
+  x: '09:15',
+  threads: '12:30',
+  bluesky: '13:00',
+  pinterest: '20:00',
+  reddit: '11:00',
+  nextdoor: '10:30',
+  snapchat: '18:00',
+  whatsapp: '10:00',
   sms: '10:30',
 };
 
@@ -65,6 +73,14 @@ const FORMAT_FOR: Record<Channel, ContentFormat> = {
   website: 'banner',
   tiktok: 'reel',
   youtube: 'video',
+  x: 'post',
+  threads: 'post',
+  bluesky: 'post',
+  pinterest: 'pin',
+  reddit: 'post',
+  nextdoor: 'post',
+  snapchat: 'story',
+  whatsapp: 'message',
   sms: 'sms',
 };
 
@@ -134,7 +150,10 @@ export function generateCampaign(input: ComposerInput): GeneratedCampaign {
   };
 
   const social = input.channels.filter((c) =>
-    ['facebook', 'instagram', 'linkedin', 'google_business', 'tiktok', 'youtube'].includes(c)
+    [
+      'facebook', 'instagram', 'linkedin', 'google_business', 'tiktok', 'youtube',
+      'x', 'threads', 'bluesky', 'pinterest', 'reddit', 'nextdoor', 'snapchat',
+    ].includes(c)
   );
 
   // --- Announcement wave (staggered across the first two days) --------------
@@ -149,14 +168,18 @@ export function generateCampaign(input: ComposerInput): GeneratedCampaign {
 
   social.forEach((channel, i) => {
     const day = addDays(input.startDate, i < 2 ? 0 : 1);
-    const body =
-      channel === 'instagram'
+    const shortForm = channel === 'x' || channel === 'threads' || channel === 'bluesky';
+    const body = shortForm
+      ? `${input.offer ? input.offer + deadline + '. ' : ''}${input.promoting}`.trim().slice(0, channel === 'x' ? 270 : 290)
+      : channel === 'instagram'
         ? `${input.promoting} ✨ ${offerLine} ${input.action} — link in bio.`.trim()
         : channel === 'linkedin'
           ? `For ${input.audience.toLowerCase() || 'our customers'}: ${input.promoting.toLowerCase().replace(/\.$/, '')}. ${offerLine}`.trim()
-          : channel === 'google_business'
+          : channel === 'google_business' || channel === 'pinterest' || channel === 'nextdoor'
             ? `${input.promoting} ${offerLine}`.trim()
-            : `${input.promoting} ${offerLine} Tap below to ${input.action.toLowerCase()}.`.trim();
+            : channel === 'reddit'
+              ? `${input.promoting} ${offerLine} Happy to answer questions in the comments.`.trim()
+              : `${input.promoting} ${offerLine} Tap below to ${input.action.toLowerCase()}.`.trim();
     variations.push({
       ...baseV,
       id: nid('v'),

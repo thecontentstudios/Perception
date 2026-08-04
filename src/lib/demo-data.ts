@@ -107,8 +107,21 @@ export const ACCOUNTS: ConnectedAccount[] = [
     scopes: ['posts.write', 'pages.write'],
     expiresAt: null, lastSyncAt: '2026-10-07T22:30',
   },
+  {
+    id: 'a-x', channel: 'x', displayName: '@loopwise — X', destinationKind: 'Accounts',
+    status: 'connected', brandId: 'b-loop', connectedByUserId: 'u-sam',
+    scopes: ['tweet.read', 'tweet.write', 'users.read'],
+    expiresAt: null, lastSyncAt: '2026-10-08T07:40',
+  },
   { id: 'a-tt', channel: 'tiktok', displayName: 'TikTok', destinationKind: 'Accounts', status: 'not_connected', brandId: null, connectedByUserId: null, scopes: [], expiresAt: null, lastSyncAt: null },
   { id: 'a-yt', channel: 'youtube', displayName: 'YouTube', destinationKind: 'Channels', status: 'not_connected', brandId: null, connectedByUserId: null, scopes: [], expiresAt: null, lastSyncAt: null },
+  { id: 'a-th', channel: 'threads', displayName: 'Threads', destinationKind: 'Profiles', status: 'not_connected', brandId: null, connectedByUserId: null, scopes: [], expiresAt: null, lastSyncAt: null },
+  { id: 'a-bsky', channel: 'bluesky', displayName: 'Bluesky', destinationKind: 'Accounts', status: 'not_connected', brandId: null, connectedByUserId: null, scopes: [], expiresAt: null, lastSyncAt: null },
+  { id: 'a-pin', channel: 'pinterest', displayName: 'Pinterest', destinationKind: 'Business accounts', status: 'not_connected', brandId: null, connectedByUserId: null, scopes: [], expiresAt: null, lastSyncAt: null },
+  { id: 'a-rdt', channel: 'reddit', displayName: 'Reddit', destinationKind: 'Accounts', status: 'not_connected', brandId: null, connectedByUserId: null, scopes: [], expiresAt: null, lastSyncAt: null },
+  { id: 'a-nd', channel: 'nextdoor', displayName: 'Nextdoor', destinationKind: 'Business pages', status: 'not_connected', brandId: null, connectedByUserId: null, scopes: [], expiresAt: null, lastSyncAt: null },
+  { id: 'a-sc', channel: 'snapchat', displayName: 'Snapchat', destinationKind: 'Public profiles', status: 'not_connected', brandId: null, connectedByUserId: null, scopes: [], expiresAt: null, lastSyncAt: null },
+  { id: 'a-wa', channel: 'whatsapp', displayName: 'WhatsApp Business', destinationKind: 'Business numbers', status: 'not_connected', brandId: null, connectedByUserId: null, scopes: [], expiresAt: null, lastSyncAt: null },
   { id: 'a-sms', channel: 'sms', displayName: 'SMS', destinationKind: 'Sending numbers', status: 'not_connected', brandId: null, connectedByUserId: null, scopes: [], expiresAt: null, lastSyncAt: null },
 ];
 
@@ -432,6 +445,18 @@ export const VARIATIONS: ChannelVariation[] = [
     mediaIds: ['m-webinar'], cta: { label: 'Save Your Seat', url: 'https://loopwise.app/webinar-fall' },
   },
   {
+    ...base, id: 'v-wb-x1', contentItemId: 'ci-wb-announce', campaignId: 'c-webinar', channel: 'x', format: 'post',
+    status: 'published', scheduledAt: '2026-10-01T09:15', publishedAt: '2026-10-01T09:15',
+    body: 'Live onboarding webinar, Oct 22 at 1 PM ET: a real Loopwise workspace set up end to end in 45 minutes, live Q&A, template pack for attendees. Seats are limited 🧵',
+    mediaIds: ['m-webinar'], cta: { label: 'Save Your Seat', url: 'https://loopwise.app/webinar-fall' }, overridden: true,
+  },
+  {
+    ...base, id: 'v-wb-x2', contentItemId: 'ci-wb-reminder', campaignId: 'c-webinar', channel: 'x', format: 'post',
+    status: 'scheduled', scheduledAt: '2026-10-15T09:15',
+    body: 'One week out: live onboarding webinar Oct 22, 1 PM ET. 45 minutes, real workspace, live Q&A, template pack. Save your seat →',
+    mediaIds: ['m-webinar'], cta: { label: 'Save Your Seat', url: 'https://loopwise.app/webinar-fall' },
+  },
+  {
     ...base, id: 'v-wb-li2', contentItemId: 'ci-wb-reminder', campaignId: 'c-webinar', channel: 'linkedin', format: 'post',
     status: 'scheduled', scheduledAt: '2026-10-15T09:00',
     body: 'One week out: our live onboarding webinar is October 22 at 1 PM ET. 45 minutes, a real workspace built end to end, live Q&A, template pack for attendees.',
@@ -562,6 +587,7 @@ export const PERFORMANCE: CampaignPerformance[] = [
       { channel: 'linkedin', impressions: 9800, clicks: 310, engagements: 205, leads: 28, conversions: 7, revenue: 0, spend: 0 },
       { channel: 'email', impressions: 1480, clicks: 172, engagements: 0, leads: 24, conversions: 9, revenue: 0, spend: 0 },
       { channel: 'facebook', impressions: 4100, clicks: 66, engagements: 120, leads: 6, conversions: 1, revenue: 0, spend: 0 },
+      { channel: 'x', impressions: 5200, clicks: 84, engagements: 310, leads: 0, conversions: 0, revenue: 0, spend: 0 },
     ],
     weeklyLeads: [
       { weekOf: '2026-09-28', leads: 11 },

@@ -200,6 +200,20 @@ lead — then a plain-language sentence per campaign:
 Charts are supporting evidence, and every charted value also appears in the
 table below them.
 
+### 6. Ad HUD — the whole advertising landscape at once
+
+![The Advertising HUD scored for a landscaping business](docs/screenshots/hud.png)
+
+The Advertising & Social Understanding HUD maps **21 surfaces** — every
+posting channel plus ads-only networks like Google Ads, Local Services Ads,
+Microsoft Ads, and Yelp Ads — with organic and paid capability, cost models,
+and an honest API reality-check per row. Fit is scored 0–3 **for your
+industry**, not a generic checklist: filter to GreenScape Landscaping and
+Nextdoor, Pinterest, and Local Services Ads surface as essential gaps with
+one-line reasons; filter to Loopwise Software and X and Reddit rise instead.
+Coverage meters show how many essential surfaces are live per business, and
+the results panel shows what each surface is actually producing.
+
 ### Also worth a look
 
 **Inbox** (comments, DMs, reviews, and email replies in one queue) ·
@@ -270,6 +284,7 @@ src/
 │   ├── contacts/             contacts, segments, consent state
 │   ├── media/                media library + alt-text management
 │   ├── analytics/            outcome-first reporting
+│   ├── hud/                  the Advertising & Social Understanding HUD
 │   ├── connections/          connector status + capabilities
 │   ├── settings/             team, roles, approval rules, audit log
 │   ├── layout.tsx            root layout + app provider
@@ -289,7 +304,10 @@ src/
     │   ├── registry.ts       channel → adapter
     │   ├── facebook.ts  instagram.ts  linkedin.ts
     │   ├── google-business.ts  email.ts
-    │   └── planned.ts        TikTok, YouTube, SMS, website
+    │   ├── planned.ts        TikTok, YouTube, SMS, website
+    │   └── expansion.ts      X, Threads, Bluesky, Pinterest, Reddit,
+    │                         Nextdoor, Snapchat, WhatsApp
+    ├── surfaces.ts           the ad landscape model behind the HUD
     ├── preflight.ts          the safeguard engine
     ├── generate.ts           composer draft generation
     ├── demo-data.ts          the demo workspace
@@ -418,6 +436,7 @@ makes the demo repeatable.
 
 | Document | What's in it |
 |---|---|
+| [`docs/ROADMAP.md`](docs/ROADMAP.md) | The build loops from prototype to working product: P0 audit, loop-by-loop exit tests, platform-review track, surface tiers, risk register |
 | [`docs/MVP_SPEC.md`](docs/MVP_SPEC.md) | P0/P1/P2 scope with acceptance criteria, explicit non-goals, four-phase delivery plan, success metrics |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Stack choices, service map, the publishing pipeline, token lifecycle, analytics pipeline |
 | [`docs/CONNECTORS.md`](docs/CONNECTORS.md) | Per-platform capability matrix, review constraints, error normalization |

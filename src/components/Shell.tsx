@@ -23,6 +23,7 @@ const NAV = [
   { href: '/contacts', label: 'Contacts', d: 'M16 19v-1.5a4 4 0 0 0-8 0V19m4-8a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm7 8v-1a3.5 3.5 0 0 0-2.5-3.3M18 5.4a3 3 0 0 1 0 5.2' },
   { href: '/media', label: 'Media Library', d: 'M4 5h16v14H4zm3 9l3.5-4 3 3.5L16 11l4 5M8.5 9.5h.01' },
   { href: '/analytics', label: 'Analytics', d: 'M4 20V10m6 10V4m6 16v-7m4 7H2' },
+  { href: '/hud', label: 'Ad HUD', d: 'M12 3v3.5M12 17.5V21M3 12h3.5M17.5 12H21M12 7.5a4.5 4.5 0 1 0 .01 0' },
   { href: '/connections', label: 'Connections', d: 'M9 7V3m6 4V3M7 7h10v5a5 5 0 0 1-10 0zm5 10v4' },
   { href: '/settings', label: 'Settings', d: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm8-3l1.8-1-1.5-3.5-2 .4a7 7 0 0 0-1.6-1l-.3-2H10l-.3 2a7 7 0 0 0-1.6 1l-2-.4L4.5 11l1.8 1-1.8 1 1.5 3.5 2-.4a7 7 0 0 0 1.6 1l.3 2h4.4l.3-2a7 7 0 0 0 1.6-1l2 .4 1.5-3.5z' },
 ];
