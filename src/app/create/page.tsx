@@ -10,6 +10,7 @@ import { generateCampaign, type ComposerInput, type GeneratedCampaign } from '@/
 import { preflight } from '@/lib/preflight';
 import { BRANDS, TEMPLATES, TODAY, useApp } from '@/lib/store';
 import { adapterFor } from '@/lib/connectors/registry';
+import { analyze } from '@/lib/discovery';
 import type { Channel, ChannelVariation } from '@/lib/types';
 
 const STEPS = ['Define the outcome', 'Add source material', 'Generate', 'Review visually', 'Approve & schedule'];
@@ -50,6 +51,7 @@ export default function CreatePage() {
 
   // Step 5 — plan choice
   const [plan, setPlan] = useState<'recommended' | 'manual' | 'template' | null>(null);
+  const [pulled, setPulled] = useState<string | null>(null);
 
   const brand = BRANDS.find((b) => b.id === brandId)!;
   const brandTemplates = TEMPLATES.filter((t) => t.industry === brand.industry);
@@ -62,6 +64,40 @@ export default function CreatePage() {
     channels: [...channels],
     colorIndex: 4,
   };
+
+  /**
+   * Pull the already-extracted facts for this brand's site into the composer,
+   * so step 2 starts from the business's own words instead of a blank box.
+   */
+  function pullFromSite() {
+    const result = analyze({
+      domain: brand.website,
+      assets: state.media,
+      usedMediaIds: new Set(state.variations.flatMap((v) => v.mediaIds)),
+      today: TODAY,
+    });
+    if (!result.ok) {
+      setPulled(`Couldn't read ${brand.website}.`);
+      return;
+    }
+    const { site } = result.intel;
+    setSourceUrl(`https://${site.domain}`);
+    setSourceNotes(
+      [
+        `Services: ${site.services.value.map((s) => s.name).join(', ')}.`,
+        site.serviceArea.value ? `Service area: ${site.serviceArea.value}.` : '',
+        site.liveOffers.value.length ? `Live offers: ${site.liveOffers.value.join('; ')}.` : '',
+        site.testimonials.value[0] ? `Testimonial: "${site.testimonials.value[0].quote}" — ${site.testimonials.value[0].attribution}` : '',
+        `Voice: ${site.voice.value.register}, ${site.voice.value.usesEmoji ? 'uses emoji' : 'no emoji'}; phrases they use: ${site.voice.value.signaturePhrases.join(', ')}.`,
+      ]
+        .filter(Boolean)
+        .join('\n')
+    );
+    if (site.conversionUrl.value) setActionUrl(site.conversionUrl.value);
+    setPulled(
+      `Read ${site.pagesCrawled} pages — services, offers, voice, and your quote link are now in the brief.`
+    );
+  }
 
   function runGenerate(nextInput: ComposerInput, keepOverrides: Map<string, string>) {
     const g = generateCampaign(nextInput);
@@ -256,6 +292,14 @@ export default function CreatePage() {
                 <label htmlFor="c-src">Website or listing URL</label>
                 <input id="c-src" className="input" placeholder={`https://${brand.website}/...`} value={sourceUrl} onChange={(e) => setSourceUrl(e.target.value)} />
                 <span className="hint">Perception reads the page for services, tone, and details.</span>
+              </div>
+              {/* Pull the facts discovery already extracted rather than making
+                  the owner retype what's on their own website. */}
+              <div className="field">
+                <button className="btn sm" onClick={pullFromSite} disabled={!!pulled}>
+                  {pulled ? '✓ Pulled from your website' : `⌕ Use what we know about ${brand.website}`}
+                </button>
+                {pulled && <span className="hint">{pulled}</span>}
               </div>
               <div className="field">
                 <label htmlFor="c-notes">Anything else it should know?</label>

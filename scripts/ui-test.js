@@ -147,6 +147,41 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
   const narrowNav = await page.$eval('.nav', (e) => e.getBoundingClientRect().width);
   narrowNav < 100 ? ok('nav auto-rails at 900px (' + narrowNav + 'px)') : bad('nav still wide at 900px: ' + narrowNav);
 
+  console.log('\n== 7e. Discovery: analyze -> suggestions -> drafts ==');
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('http://localhost:3000/discover', { waitUntil: 'networkidle' });
+  await page.click('text=Analyze this business');
+  await page.waitForTimeout(3200);
+  const facts = await page.$$eval('.kv dd', (els) => els.length);
+  facts >= 6 ? ok(`extracted ${facts} business facts`) : bad('too few facts: ' + facts);
+  const provenance = await page.$$eval('.kv dd div', (els) =>
+    els.filter((e) => e.textContent.trim().length > 0).length
+  );
+  provenance >= 6 ? ok('every fact shows its source') : bad('facts missing provenance: ' + provenance);
+  const sugg = await page.$$('input[type=checkbox]');
+  sugg.length >= 4 ? ok(`${sugg.length} suggestions generated`) : bad('too few suggestions: ' + sugg.length);
+  const rationales = await page.$$eval('.section-label', (els) =>
+    els.filter((e) => e.textContent.includes("Why we're")).length
+  );
+  rationales === sugg.length
+    ? ok('every suggestion carries a rationale')
+    : bad(`${rationales} rationales for ${sugg.length} suggestions`);
+  const before = await page.evaluate(() => document.querySelectorAll('.cal-card').length);
+  await page.click('button.btn.primary.sm');
+  await page.waitForTimeout(1200);
+  const onCalendar = page.url().includes('/calendar');
+  onCalendar ? ok('accepting suggestions lands on the calendar') : bad('did not navigate: ' + page.url());
+  const after = await page.evaluate(() => document.querySelectorAll('.cal-card').length);
+  after > before ? ok(`drafts added to calendar (${after} cards)`) : bad('no cards added');
+
+  console.log('\n== 7f. Discovery rejects an unknown domain ==');
+  await page.goto('http://localhost:3000/discover', { waitUntil: 'networkidle' });
+  await page.fill('#d-url', 'not-a-real-business-xyz.com');
+  await page.click('text=Analyze this business');
+  await page.waitForTimeout(3200);
+  const errShown = await page.$('.warning-row.block');
+  errShown ? ok('unknown domain shows an honest failure') : bad('no error for unknown domain');
+
   console.log('\n== 8. Reduced motion ==');
   const ctx2 = await browser.newContext({ viewport: { width: 1280, height: 800 }, reducedMotion: 'reduce' });
   const p2 = await ctx2.newPage();

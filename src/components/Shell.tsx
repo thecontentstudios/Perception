@@ -45,6 +45,11 @@ const NAV_SECTIONS: { label: string; items: NavItem[] }[] = [
       { href: '/campaigns', label: 'Campaigns', d: 'M4 15V4l16 4-16 4m0 3v6m0-6l7 5' },
       { href: '/calendar', label: 'Calendar', d: 'M4 6h16v15H4zM4 10h16M8 3v4m8-4v4' },
       { href: '/create', label: 'Create', d: 'M12 5v14M5 12h14' },
+      {
+        href: '/discover',
+        label: 'Discover',
+        d: 'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zm10 2l-4.35-4.35M11 8v6m-3-3h6',
+      },
     ],
   },
   {

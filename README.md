@@ -168,6 +168,20 @@ Other warnings worth finding: the missing unsubscribe footer on the last-call
 email (Oct 20), the wrong image ratio on the studio post (Oct 9), and three
 campaigns colliding on October 15.
 
+### 3b. Discover — read a business, draft from what's there
+
+![Discovery results with provenance and gaps](docs/screenshots/discover.png)
+
+Analyze `greenscapenj.com`. Perception reads the site, finds the social
+profiles that already exist, audits the photo library, and drafts posts
+grounded in all three — each one carrying **why** it's suggested, traced to
+evidence:
+
+![Suggested posts with rationale](docs/screenshots/discover-suggestions.png)
+
+Select a few and add them to the calendar as drafts. Full detail in
+[`docs/DISCOVERY.md`](docs/DISCOVERY.md).
+
 ### 4. Create — the five-step composer
 
 ![The composer's visual review step](docs/screenshots/composer.png)
@@ -439,6 +453,7 @@ makes the demo repeatable.
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | The build loops from prototype to working product: P0 audit, loop-by-loop exit tests, platform-review track, surface tiers, risk register |
 | [`docs/MVP_SPEC.md`](docs/MVP_SPEC.md) | P0/P1/P2 scope with acceptance criteria, explicit non-goals, four-phase delivery plan, success metrics |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Stack choices, service map, the publishing pipeline, token lifecycle, analytics pipeline |
+| [`docs/DISCOVERY.md`](docs/DISCOVERY.md) | How a business is read from its website, profiles, and media — provenance, gap detection, and how suggestions justify themselves |
 | [`docs/CONNECTORS.md`](docs/CONNECTORS.md) | Per-platform capability matrix, review constraints, error normalization |
 | [`prisma/schema.prisma`](prisma/schema.prisma) | The production data model, commented |
 
