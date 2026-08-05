@@ -26,7 +26,7 @@ const date = (s: string): Date => new Date(s.length > 10 ? `${s}:00Z` : `${s}T00
 async function main() {
   // Order matters: children reference parents. Truncate for a repeatable seed.
   await db.$executeRawUnsafe(`
-    TRUNCATE TABLE "AuditEvent","Conversion","Metric","Conversation","EmailDelivery",
+    TRUNCATE TABLE "AuditEvent","Conversion","LinkClick","TrackedLink","Metric","Conversation","EmailDelivery",
       "EmailTemplate","SegmentMember","AudienceSegment","Contact","PublishedPost",
       "PublicationAttempt","Approval","VariationMedia","MediaAsset","ChannelVariation",
       "ContentItem","Campaign","ConnectedAccount","Membership","User","Location",

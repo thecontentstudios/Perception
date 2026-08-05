@@ -149,6 +149,8 @@ repeatedly without cleanup.
 | `npm run db:seed` | Load the demo workspace into Postgres |
 | `npm run test:unit` | Facet byte offsets, grapheme counting, token crypto, PKCE, read/write path |
 | `npm run test:worker` | Schedules a post, runs the worker, checks it published (needs `node scripts/mock-mastodon.js`) |
+| `node scripts/mock-mastodon.js` | Stand-in Mastodon instance for the worker suite |
+| `node scripts/mock-site.js` | Stand-in customer website, for testing the tracking snippet |
 | `npm run test:ui` | Browser suite: nav, panels, drag-drop, discovery, fan-out, live connections (needs the server running) |
 | `npm test` | All three suites |
 

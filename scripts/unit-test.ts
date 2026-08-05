@@ -149,6 +149,22 @@ async function readPathChecks() {
   const { db } = await import('../src/lib/db');
   const fx = await import('../src/lib/demo-data');
 
+  // The browser suite writes real conversions through /api/events. Clearing
+  // the previous run's here — before it runs again — keeps the demo workspace
+  // from slowly filling with test leads that would later show up in analytics.
+  //
+  // Two shapes to catch: the ones the suite posts directly (prefixed ids) and
+  // the ones the *snippet* generates on the mock customer site, whose ids it
+  // mints itself. Those are identified by where they came from instead.
+  await db.conversion.deleteMany({
+    where: {
+      OR: [
+        { externalId: { startsWith: 'ui-test-' } },
+        { attribution: { path: ['referrer'], string_contains: 'localhost:4322' } },
+      ],
+    },
+  });
+
   try {
     const w = await loadWorkspace(fx.ORG.id);
 

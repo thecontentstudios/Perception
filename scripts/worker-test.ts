@@ -46,6 +46,11 @@ async function main() {
     return;
   }
 
+  // Start from a known state: the mock honours idempotency keys the way real
+  // Mastodon does, so a key left over from a run in the same minute would make
+  // a genuine publish look like it did nothing.
+  await fetch(`http://${HOST}/__reset`, { method: 'POST' });
+
   console.log('\n== Worker: a scheduled post publishes with nothing watching ==');
 
   // A grant pointing at the mock instance. The publisher reads host and limit

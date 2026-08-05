@@ -57,6 +57,16 @@ http
     // Test introspection, not part of the Mastodon API.
     if (req.url === '/__posts') return send(res, 200, { count: posts.length, posts });
 
+    // Also not Mastodon: let a test start from a known state. Without this,
+    // two runs inside the same minute share an idempotency key, the second
+    // correctly gets the first run's post back, and the test reads that as a
+    // publish that never happened.
+    if (req.url === '/__reset' && req.method === 'POST') {
+      posts.length = 0;
+      byKey.clear();
+      return send(res, 200, { reset: true });
+    }
+
     send(res, 404, { error: 'Record not found' });
   })
   .listen(port, () => console.log(`mock mastodon on http://localhost:${port}`));
