@@ -285,3 +285,45 @@ the job posts nothing new. It skips cleanly when the mock isn't running.
 redis-server --port 6380 --daemonize yes   # or set REDIS_URL
 npm run worker                             # in its own terminal
 ```
+
+### Phase 1.5 — Failure surfaces ✅
+
+The worker was already writing `PublicationAttempt`, setting `FAILED`, and
+leaving an audit row. What 1.5 added is the half that matters to the person
+using it: **the failure reaching Home with a fix that actually fixes.**
+
+Testing it end to end found two real bugs on Home:
+
+- **The fix button was hardcoded to "Reconnect LinkedIn"** on every failure,
+  whatever the channel. A Mastodon failure sent the owner to reconnect
+  something unrelated. It now names the channel that actually failed.
+- **"Retry now" was a simulation.** The reducer faked a publish and marked the
+  post published without anything leaving the building.
+
+Retry is now `POST /api/retry`: it moves the post back to `scheduled`, releases
+any stale claim, and puts it at the front of the queue. The worker does the
+rest, so the retry gets the same preflight, the same idempotency, and the same
+failure recording as the original attempt — a retry down a separate path would
+be a second, less-tested publisher. **The slot key is reused deliberately:** if
+the first attempt failed *after* the platform accepted the post, a fresh key
+would publish it twice.
+
+The offered fix also matches the failure. An expired token needs reconnecting
+and a retry will just fail again, so that case leads with Reconnect and offers
+"Retry anyway" second. Everything else leads with Retry.
+
+`npm run test:worker` now revokes a live token mid-flight and asserts the whole
+chain: the publish fails, the failure is classified terminal rather than
+retryable, the post is marked failed, **the claim is released**, the attempt
+records `auth_expired` with a readable message, the audit row exists, the
+failure surfaces *through the read path* with its code so Home can pick the
+right fix — and then, after restoring the token, that the retry publishes and
+both attempts are recorded in order.
+
+---
+
+## Phase 1 complete
+
+Close the laptop, reopen it an hour later, and the scheduled post went out.
+That was the phase gate, and it holds. Phase 2 is next: making the reporting
+true.

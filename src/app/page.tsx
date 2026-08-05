@@ -11,8 +11,42 @@ import { PERFORMANCE } from '@/lib/demo-data';
 import { TODAY, useApp } from '@/lib/store';
 
 export default function HomePage() {
-  const { state, dispatch, visibleVariations, visibleCampaigns, campaignById, itemById, preflightFor } = useApp();
+  const { state, dispatch, source, visibleVariations, visibleCampaigns, campaignById, itemById, preflightFor } = useApp();
   const [selected, setSelected] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState<string | null>(null);
+  const [retryNote, setRetryNote] = useState<string | null>(null);
+
+  /**
+   * Retry for real when there is a worker to retry through, and fall back to
+   * the in-memory simulation for the fixture demo. The button has to do
+   * *something* in both worlds, but only one of them is a real publish and the
+   * note says which.
+   */
+  const retry = async (variationId: string) => {
+    if (source !== 'database') {
+      dispatch({ type: 'retryFailed', variationId });
+      return;
+    }
+    setRetrying(variationId);
+    setRetryNote(null);
+    try {
+      const res = await fetch('/api/retry', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ variationId }),
+      });
+      const d = await res.json();
+      setRetryNote(
+        d.ok
+          ? 'Queued. The worker will pick it up within 30 seconds.'
+          : `Could not queue it: ${d.reason}`
+      );
+    } catch (e) {
+      setRetryNote(`Could not queue it: ${(e as Error).message}`);
+    } finally {
+      setRetrying(null);
+    }
+  };
 
   const failed = visibleVariations.filter((v) => v.status === 'failed');
   const inReview = visibleVariations.filter((v) => v.status === 'review');
@@ -98,16 +132,33 @@ export default function HomePage() {
                     {v.failure?.message} {campaignById(v.campaignId)?.name} · {CHANNEL_META[v.channel].label}.
                   </div>
                   <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-                    <Link href="/connections" className="btn sm primary">
-                      Reconnect LinkedIn
-                    </Link>
-                    <button className="btn sm" onClick={() => dispatch({ type: 'retryFailed', variationId: v.id })}>
-                      Retry now
-                    </button>
+                    {/* The fix has to match the failure. An expired token needs
+                        reconnecting and a retry will just fail again; anything
+                        else is worth another attempt. Offering both, or naming
+                        the wrong channel, sends the owner somewhere useless. */}
+                    {v.failure?.code === 'auth_expired' ? (
+                      <Link href="/connections" className="btn sm primary">
+                        Reconnect {CHANNEL_META[v.channel].label}
+                      </Link>
+                    ) : (
+                      <button className="btn sm primary" onClick={() => retry(v.id)}>
+                        {retrying === v.id ? 'Retrying…' : 'Retry now'}
+                      </button>
+                    )}
+                    {v.failure?.code === 'auth_expired' && (
+                      <button className="btn sm" onClick={() => retry(v.id)}>
+                        {retrying === v.id ? 'Retrying…' : 'Retry anyway'}
+                      </button>
+                    )}
                     <button className="btn sm ghost" onClick={() => setSelected(v.id)}>
                       Open
                     </button>
                   </div>
+                  {retryNote && (
+                    <div style={{ marginTop: 6, fontSize: 11.5, color: 'var(--ink-2)' }} role="status">
+                      {retryNote}
+                    </div>
+                  )}
                 </div>
               </li>
             ))}

@@ -18,6 +18,7 @@ import { saveGrant, removeGrant } from '../src/lib/oauth/store';
 import { reconcileAccount, reconcileDisconnect } from '../src/lib/oauth/reconcile';
 import { publishQueue } from '../src/lib/queue';
 import { slotKey } from '../src/lib/queue/scheduler';
+import { runPublishJob } from '../src/lib/queue/publish-job';
 
 let failures = 0;
 const ok = (m: string) => console.log('  PASS ' + m);
@@ -139,14 +140,99 @@ async function main() {
   audit ? ok('audit row explains what happened') : bad('no audit row for the publish');
 
   // Idempotency: replaying the same slot must not produce a second status.
-  const { runPublishJob } = await import('../src/lib/queue/publish-job');
   const replay = await runPublishJob({ variationId: TEST_ID, idempotencyKey: slotKey(TEST_ID, dueAt) });
   const afterReplay = await fetch(`http://${HOST}/__posts`).then((r) => r.json());
   replay.status === 'skipped' && afterReplay.count === after.count
     ? ok(`replaying the same job posts nothing new (${replay.detail})`)
     : bad(`replay produced ${afterReplay.count - after.count} extra status(es), result ${replay.status}`);
 
-  // Clean up so the demo workspace is unchanged and the test re-runs.
+  await cleanup();
+
+  // ---------------------------------------------------------------------
+  console.log('\n== Failure surfaces: kill a token mid-flight ==');
+  // The Phase 1.5 acceptance test. A revoked token is the most common real
+  // failure in this product, and the thing that has to work is not the
+  // failing — it is what the owner sees afterwards and whether the fix fixes.
+  const failAt = new Date(Date.now() - 1000);
+  await db.channelVariation.create({
+    data: {
+      id: TEST_ID, contentItemId: item.id, channel: 'MASTODON', format: 'update',
+      status: 'APPROVED', scheduledAt: failAt,
+      body: 'This one is going out with a dead token.',
+      hashtags: [], hasUnsubscribeFooter: false,
+    },
+  });
+
+  // Revoke: keep the workspace row connected (so preflight lets it through)
+  // and break the credential, which is exactly what a revoked token looks
+  // like from here — valid yesterday, 401 today.
+  saveGrant({
+    channel: 'mastodon',
+    accessToken: 'revoked-token',
+    refreshToken: null,
+    expiresInSec: null,
+    scopes: ['write:statuses'],
+    accountLabel: '@greenscape',
+    externalAccountId: `${HOST}|1|500`,
+  });
+  await reconcileAccount({
+    channel: 'mastodon', accountLabel: '@greenscape',
+    externalAccountId: `${HOST}|1|500`, scopes: ['write:statuses'], expiresAt: null,
+  });
+
+  const failKey = slotKey(TEST_ID, failAt);
+  const failed = await runPublishJob({ variationId: TEST_ID, idempotencyKey: failKey });
+  failed.status === 'failed' ? ok(`publish failed as expected (${failed.detail})`) : bad(`expected failure, got ${failed.status}`);
+  failed.retryable === false
+    ? ok('a revoked token is classified terminal, not retryable')
+    : bad('a revoked token was marked retryable — retries cannot fix it');
+
+  const row = await db.channelVariation.findUnique({ where: { id: TEST_ID } });
+  row?.status === 'FAILED' ? ok('post is marked failed') : bad(`status is ${row?.status}, expected FAILED`);
+  row?.claimedAt === null ? ok('claim released on failure') : bad('failed post still holds its claim');
+
+  const failAttempt = await db.publicationAttempt.findFirst({ where: { variationId: TEST_ID } });
+  failAttempt?.errorCode === 'auth_expired'
+    ? ok(`attempt recorded the reason (${failAttempt.errorCode})`)
+    : bad(`expected errorCode auth_expired, got ${failAttempt?.errorCode}`);
+  failAttempt?.errorMessage ? ok('attempt carries a human-readable message') : bad('no error message stored');
+
+  const failAudit = await db.auditEvent.findFirst({ where: { target: TEST_ID, action: 'publish.failed' } });
+  failAudit ? ok('audit row records the failure') : bad('no audit row for the failure');
+
+  // The read path is what Home renders from, so this is the real check that
+  // the failure reaches the screen — not that a row exists somewhere.
+  const { loadWorkspace } = await import('../src/lib/queries');
+  const { ORG } = await import('../src/lib/demo-data');
+  const w = await loadWorkspace(ORG.id);
+  const onScreen = w.variations.find((v) => v.id === TEST_ID);
+  onScreen?.failure?.code === 'auth_expired'
+    ? ok('failure surfaces through the read path with its code, so Home offers the right fix')
+    : bad(`read path shows failure ${JSON.stringify(onScreen?.failure)}`);
+
+  // And the fix has to work. Restore the token, retry, and it should publish.
+  saveGrant({
+    channel: 'mastodon',
+    accessToken: process.env.MOCK_TOKEN || 'mock-access-token',
+    refreshToken: null, expiresInSec: null, scopes: ['write:statuses'],
+    accountLabel: '@greenscape', externalAccountId: `${HOST}|1|500`,
+  });
+  await db.channelVariation.update({ where: { id: TEST_ID }, data: { status: 'SCHEDULED', claimedAt: null } });
+  const fixed = await runPublishJob({ variationId: TEST_ID, idempotencyKey: failKey });
+  fixed.status === 'published'
+    ? ok('after reconnecting, the retry publishes — the fix actually fixes')
+    : bad(`retry after fix gave ${fixed.status}: ${fixed.detail}`);
+
+  const attemptsNow = await db.publicationAttempt.findMany({ where: { variationId: TEST_ID }, orderBy: { attemptNumber: 'asc' } });
+  attemptsNow.length === 2 && attemptsNow[0].success === false && attemptsNow[1].success === true
+    ? ok('both attempts recorded, in order, with their outcomes')
+    : bad(`expected a failed then a successful attempt, got ${attemptsNow.map((a) => a.success).join(',')}`);
+
+  await cleanup();
+}
+
+/** Leave the demo workspace exactly as found, so the suite re-runs. */
+async function cleanup() {
   await db.publicationAttempt.deleteMany({ where: { variationId: TEST_ID } });
   await db.publishedPost.deleteMany({ where: { variationId: TEST_ID } });
   await db.auditEvent.deleteMany({ where: { target: TEST_ID } });
