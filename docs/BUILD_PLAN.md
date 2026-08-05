@@ -407,3 +407,80 @@ by a unique index rather than a best-effort check.
 Eleven checks walk the real path: click the link, read what the redirect handed
 the landing page, convert with it from a different origin, and confirm the
 campaign total moved.
+
+### Phase 2.3 — The drop-in snippet ✅
+
+`<script src=".../p.js" async></script>`. Served from a route rather than a
+static file so the endpoint is baked in from `APP_URL` — a snippet with a
+hardcoded host is a support ticket waiting for the first self-hosted install.
+
+**Three deliberate limits**, because a tracking script that oversteps is worse
+than no tracking script:
+
+- **It does not auto-track every form.** Search boxes, logins, and newsletter
+  widgets are forms too. Tracking is opt-in with `data-perception="..."`.
+- **No personal data unless asked.** An email is sent only from a field marked
+  `data-perception-email`.
+- **Nothing stored on our domain.** Attribution lives in the visitor's own
+  localStorage, first-party to the customer's site.
+
+**`sendBeacon` posts `text/plain`, not `application/json`, and that matters.**
+A JSON content type makes it a preflighted cross-origin request, and
+`sendBeacon` queues *before* it knows whether the preflight passed — it returns
+`true` either way. A failed preflight would silently drop the conversion with
+no fallback. `text/plain` is a simple request; the server parses the body
+regardless of the label.
+
+Testing this against a page on our own domain would test nothing, so
+`scripts/mock-site.js` serves a real customer page from a different origin with
+one script tag and one marked form — the install instructions, executed.
+
+**Two test bugs this shook out**, both caused by earlier phases making the
+suite mutate real state:
+
+- Section 6's drag persists now, so it has to put the card back. Without that,
+  each run walked a card further from its seeded date until a later section
+  could no longer find it — which is what actually happened.
+- The worker test resets the mock instance first. Two runs inside the same
+  minute share an idempotency key, so the second correctly gets the first
+  run's post back — and the test read that as a publish that never happened.
+
+The suite is now verified re-runnable: three consecutive `npm test` runs pass
+with the seeded variation count unchanged.
+
+### Phase 2.4 — Analytics reads real rows ✅
+
+`computePerformance()` builds `CampaignPerformance` from `LinkClick` and
+`Conversion`. The sentence this phase existed for — "this campaign generated N
+quote requests" — is now a `COUNT`.
+
+**The hard part was what cannot be computed.** Clicks, leads, conversions and
+revenue come from rows we own. Impressions, engagements and ad spend do not:
+they live behind platform metrics APIs and ad accounts this product does not
+read yet.
+
+The tempting move is to leave those at `0`. That is a lie with a number on it.
+An owner reading "0 impressions" concludes their post was not seen, and
+"Cost per lead: $0" reads as *these leads were free* — both much stronger
+claims than "we don't know". So the unmeasured metrics became `number | null`,
+and the compiler then enumerated every place that had been quietly treating
+absence as zero: nine call sites across Analytics and the HUD, including two
+sums where null had to propagate rather than collapse.
+
+The screen now renders them as "not measured", says which metrics are measured
+and which need a connection, and reports how many results it could trace to a
+specific post out of the total.
+
+**The acceptance test reconciles rather than inspects.** It reads the computed
+totals, reads the underlying click and conversion rows independently, and fails
+if they disagree — which is a stronger claim than "the numbers look plausible".
+It also asserts every channel row reports unmeasured metrics as `null` and
+never as a number, and that the words "not measured" actually reach the screen.
+
+---
+
+## Phase 2 complete
+
+The phase gate was: *the sentence "this campaign generated N quote requests" is
+computed, not written.* It is — and the numbers it can't compute say so
+instead of guessing. Phase 3 next: the learning loop.

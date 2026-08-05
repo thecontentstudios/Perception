@@ -637,10 +637,10 @@ export const PERFORMANCE: CampaignPerformance[] = [
       { kind: 'email_signups', count: 34 },
     ],
     byChannel: [
-      { channel: 'instagram', impressions: 18400, clicks: 412, engagements: 1290, leads: 9, conversions: 3, revenue: 3690, spend: 0 },
-      { channel: 'email', impressions: 2320, clicks: 186, engagements: 0, leads: 6, conversions: 4, revenue: 4280, spend: 0 },
+      { channel: 'instagram', impressions: 18400, clicks: 412, engagements: 1290, leads: 9, conversions: 3, revenue: 3690, spend: null },
+      { channel: 'email', impressions: 2320, clicks: 186, engagements: 0, leads: 6, conversions: 4, revenue: 4280, spend: null },
       { channel: 'facebook', impressions: 12100, clicks: 238, engagements: 640, leads: 4, conversions: 1, revenue: 980, spend: 120 },
-      { channel: 'google_business', impressions: 3900, clicks: 145, engagements: 88, leads: 2, conversions: 1, revenue: 890, spend: 0 },
+      { channel: 'google_business', impressions: 3900, clicks: 145, engagements: 88, leads: 2, conversions: 1, revenue: 890, spend: null },
     ],
     weeklyLeads: [
       { weekOf: '2026-09-14', leads: 3 },
@@ -658,10 +658,10 @@ export const PERFORMANCE: CampaignPerformance[] = [
       { kind: 'trial_signups', count: 17 },
     ],
     byChannel: [
-      { channel: 'linkedin', impressions: 9800, clicks: 310, engagements: 205, leads: 28, conversions: 7, revenue: 0, spend: 0 },
-      { channel: 'email', impressions: 1480, clicks: 172, engagements: 0, leads: 24, conversions: 9, revenue: 0, spend: 0 },
-      { channel: 'facebook', impressions: 4100, clicks: 66, engagements: 120, leads: 6, conversions: 1, revenue: 0, spend: 0 },
-      { channel: 'x', impressions: 5200, clicks: 84, engagements: 310, leads: 0, conversions: 0, revenue: 0, spend: 0 },
+      { channel: 'linkedin', impressions: 9800, clicks: 310, engagements: 205, leads: 28, conversions: 7, revenue: 0, spend: null },
+      { channel: 'email', impressions: 1480, clicks: 172, engagements: 0, leads: 24, conversions: 9, revenue: 0, spend: null },
+      { channel: 'facebook', impressions: 4100, clicks: 66, engagements: 120, leads: 6, conversions: 1, revenue: 0, spend: null },
+      { channel: 'x', impressions: 5200, clicks: 84, engagements: 310, leads: 0, conversions: 0, revenue: 0, spend: null },
     ],
     weeklyLeads: [
       { weekOf: '2026-09-28', leads: 11 },
@@ -679,9 +679,9 @@ export const PERFORMANCE: CampaignPerformance[] = [
       { kind: 'calls', count: 5 },
     ],
     byChannel: [
-      { channel: 'instagram', impressions: 7600, clicks: 198, engagements: 540, leads: 7, conversions: 7, revenue: 665, spend: 0 },
-      { channel: 'email', impressions: 640, clicks: 58, engagements: 0, leads: 3, conversions: 3, revenue: 285, spend: 0 },
-      { channel: 'google_business', impressions: 1900, clicks: 61, engagements: 30, leads: 2, conversions: 2, revenue: 190, spend: 0 },
+      { channel: 'instagram', impressions: 7600, clicks: 198, engagements: 540, leads: 7, conversions: 7, revenue: 665, spend: null },
+      { channel: 'email', impressions: 640, clicks: 58, engagements: 0, leads: 3, conversions: 3, revenue: 285, spend: null },
+      { channel: 'google_business', impressions: 1900, clicks: 61, engagements: 30, leads: 2, conversions: 2, revenue: 190, spend: null },
     ],
     weeklyLeads: [
       { weekOf: '2026-09-28', leads: 4 },
@@ -693,7 +693,7 @@ export const PERFORMANCE: CampaignPerformance[] = [
     campaignId: 'c-openhouse',
     outcomes: [{ kind: 'rental_inquiries', count: 4 }],
     byChannel: [
-      { channel: 'email', impressions: 57, clicks: 19, engagements: 0, leads: 4, conversions: 2, revenue: 0, spend: 0 },
+      { channel: 'email', impressions: 57, clicks: 19, engagements: 0, leads: 4, conversions: 2, revenue: 0, spend: null },
     ],
     weeklyLeads: [{ weekOf: '2026-10-05', leads: 4 }],
     headline: '4 tour requests before launch — all from the waitlist email.',
@@ -706,8 +706,8 @@ export const PERFORMANCE: CampaignPerformance[] = [
     ],
     byChannel: [
       { channel: 'facebook', impressions: 28400, clicks: 590, engagements: 1420, leads: 14, conversions: 8, revenue: 6900, spend: 240 },
-      { channel: 'email', impressions: 3600, clicks: 310, engagements: 0, leads: 12, conversions: 8, revenue: 6200, spend: 0 },
-      { channel: 'instagram', impressions: 15900, clicks: 350, engagements: 980, leads: 8, conversions: 3, revenue: 2500, spend: 0 },
+      { channel: 'email', impressions: 3600, clicks: 310, engagements: 0, leads: 12, conversions: 8, revenue: 6200, spend: null },
+      { channel: 'instagram', impressions: 15900, clicks: 350, engagements: 980, leads: 8, conversions: 3, revenue: 2500, spend: null },
     ],
     weeklyLeads: [
       { weekOf: '2026-06-15', leads: 6 },

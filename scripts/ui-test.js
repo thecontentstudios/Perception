@@ -789,6 +789,69 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
     }
   }
 
+  console.log('\n== 14. Analytics reads real rows ==');
+  {
+    const api = await page.evaluate(() => fetch('/api/workspace').then((r) => r.json()));
+    if (api.source !== 'database') {
+      ok('no database — analytics computation skipped by design');
+    } else {
+      // The Phase 2.4 acceptance test: every number traces to a row, and
+      // nothing that cannot be measured is reported as if it could.
+      const a = await page.evaluate(() => fetch('/api/analytics').then((r) => r.json()));
+      a.source === 'computed' ? ok('analytics computed, not fixtured') : bad(`source is ${a.source}: ${a.reason}`);
+
+      a.meta.unmeasured.includes('impressions') && a.meta.unmeasured.includes('spend')
+        ? ok(`impressions and spend declared unmeasured (${a.meta.unmeasured.join(', ')})`)
+        : bad(`unmeasured list wrong: ${a.meta.unmeasured}`);
+      a.meta.measured.includes('leads') && a.meta.measured.includes('revenue')
+        ? ok(`leads and revenue declared measured (${a.meta.measured.join(', ')})`)
+        : bad(`measured list wrong: ${a.meta.measured}`);
+
+      // Unmeasured must be null, never 0 — "0 impressions" reads as "nobody
+      // saw it", which is a claim we cannot make.
+      const rows = a.performance.flatMap((p) => p.byChannel);
+      rows.every((r) => r.impressions === null && r.engagements === null && r.spend === null)
+        ? ok(`${rows.length} channel rows report unmeasured as null, not zero`)
+        : bad('a channel row reported an unmeasured metric as a number');
+
+      // Every computed number has to reconcile with the rows behind it.
+      const links = await page.evaluate((c) =>
+        fetch(`/api/links?campaignId=${c}`).then((r) => r.json()),
+        a.performance.find((p) => p.byChannel.length > 0)?.campaignId ?? '');
+      const withData = a.performance.find((p) => p.byChannel.length > 0);
+      if (!withData) {
+        bad('no campaign has any computed results — the click path may be broken');
+      } else {
+        const computedClicks = withData.byChannel.reduce((s, c) => s + c.clicks, 0);
+        const rowClicks = links.ok ? links.links.reduce((s, l) => s + l.clicks, 0) : -1;
+        computedClicks === rowClicks
+          ? ok(`clicks reconcile with the click rows (${computedClicks})`)
+          : bad(`analytics says ${computedClicks} clicks, link rows say ${rowClicks}`);
+
+        const conv = await page.evaluate((c) =>
+          fetch(`/api/events?campaignId=${c}`).then((r) => r.json()), withData.campaignId);
+        const computedLeads = withData.byChannel.reduce((s, c) => s + c.leads, 0);
+        computedLeads === conv.total
+          ? ok(`leads reconcile with the conversion rows (${computedLeads})`)
+          : bad(`analytics says ${computedLeads} leads, conversion rows say ${conv.total}`);
+
+        withData.headline && !/\d+ quote requests? so far, up \d/.test(withData.headline)
+          ? ok(`headline is generated: "${withData.headline.slice(0, 70)}…"`)
+          : bad('headline looks hardcoded');
+      }
+
+      // And the screen has to say which it is showing.
+      await page.goto('http://localhost:3000/analytics', { waitUntil: 'networkidle' });
+      await page.waitForTimeout(800);
+      const banner = await page.$eval('.page .card .demo-clock', (e) => e.textContent.trim());
+      banner.includes('Computed')
+        ? ok(`the page says where its numbers came from ("${banner}")`)
+        : bad(`banner says "${banner}"`);
+      const notMeasured = await page.evaluate(() => document.body.innerText.includes('not measured') || document.body.innerText.includes('Not measured'));
+      notMeasured ? ok('unmeasured metrics read "not measured" on screen') : bad('no "not measured" anywhere — a zero is being shown instead');
+    }
+  }
+
   console.log('\n' + (errors.length ? 'PAGE ERRORS:\n' + errors.join('\n') : 'no page errors'));
   console.log(fail.length ? `\n${fail.length} FAILURE(S)` : '\nALL CHECKS PASSED');
   await browser.close();

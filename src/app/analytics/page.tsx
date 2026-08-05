@@ -1,14 +1,14 @@
 'use client';
 
 import Link from 'next/link';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { fmtMoney, fmtNum } from '@/components/ui';
 import { CHANNEL_META, ChannelIcon } from '@/lib/channels';
 import { addDays, fmtShort } from '@/lib/dates';
 import { PERFORMANCE } from '@/lib/demo-data';
 import { GOAL_LABELS } from '@/lib/types';
 import { useApp } from '@/lib/store';
-import type { ChannelMetrics } from '@/lib/types';
+import type { CampaignPerformance, ChannelMetrics } from '@/lib/types';
 
 /**
  * Analytics leads with business outcomes — quote requests, bookings, revenue —
@@ -122,14 +122,52 @@ function ChannelBars({ rows }: { rows: ChannelMetrics[] }) {
   );
 }
 
+/**
+ * Add two metrics that may be unmeasured. Null propagates: adding a known
+ * number to an unknown one does not produce a known total.
+ */
+function addMaybe(a: number | null, b: number | null): number | null {
+  if (a === null || b === null) return null;
+  return a + b;
+}
+
+/** Render a metric, or say plainly that we do not have it. */
+function measured(n: number | null, fmt: (n: number) => string) {
+  if (n === null) return <span style={{ color: 'var(--muted)' }} title="Needs a platform metrics connection">not measured</span>;
+  return fmt(n);
+}
+
 export default function AnalyticsPage() {
   const { visibleCampaigns, campaignById } = useApp();
   const [sel, setSel] = useState('all');
 
+  /**
+   * Real performance when there are rows to compute it from, fixtures
+   * otherwise. Both go through the same shape, so nothing below this line has
+   * to care which it got — but the banner tells the reader, because acting on
+   * illustrative numbers is exactly the mistake this screen exists to prevent.
+   */
+  const [computed, setComputed] = useState<CampaignPerformance[] | null>(null);
+  const [meta, setMeta] = useState<{ attributedConversions: number; totalConversions: number } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/analytics')
+      .then((r) => r.json())
+      .then((d) => {
+        if (cancelled || d.source !== 'computed') return;
+        setComputed(d.performance);
+        setMeta(d.meta);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
   const perf = useMemo(() => {
     const visible = new Set(visibleCampaigns.map((c) => c.id));
-    return PERFORMANCE.filter((p) => visible.has(p.campaignId)).filter((p) => sel === 'all' || p.campaignId === sel);
-  }, [visibleCampaigns, sel]);
+    const source = computed ?? PERFORMANCE;
+    return source.filter((p) => visible.has(p.campaignId)).filter((p) => sel === 'all' || p.campaignId === sel);
+  }, [visibleCampaigns, sel, computed]);
 
   const byChannel = useMemo(() => {
     const map = new Map<string, ChannelMetrics>();
@@ -138,13 +176,15 @@ export default function AnalyticsPage() {
         const cur = map.get(ch.channel);
         if (!cur) map.set(ch.channel, { ...ch });
         else {
-          cur.impressions += ch.impressions;
+          // Unmeasured metrics stay unmeasured through a sum. Treating null as
+          // zero here would quietly turn "we don't know" into "none".
+          cur.impressions = addMaybe(cur.impressions, ch.impressions);
+          cur.engagements = addMaybe(cur.engagements, ch.engagements);
+          cur.spend = addMaybe(cur.spend, ch.spend);
           cur.clicks += ch.clicks;
-          cur.engagements += ch.engagements;
           cur.leads += ch.leads;
           cur.conversions += ch.conversions;
           cur.revenue += ch.revenue;
-          cur.spend += ch.spend;
         }
       }
     }
@@ -164,9 +204,9 @@ export default function AnalyticsPage() {
       leads: t.leads + ch.leads,
       conversions: t.conversions + ch.conversions,
       revenue: t.revenue + ch.revenue,
-      spend: t.spend + ch.spend,
+      spend: addMaybe(t.spend, ch.spend),
     }),
-    { leads: 0, conversions: 0, revenue: 0, spend: 0 }
+    { leads: 0, conversions: 0, revenue: 0, spend: null as number | null }
   );
 
   const bestConv = byChannel
@@ -183,6 +223,27 @@ export default function AnalyticsPage() {
           <h1>Analytics</h1>
           <div className="sub">Results in the language of the business: leads, bookings, and revenue first — impressions second.</div>
         </div>
+      </div>
+
+      {/* Where these numbers come from. A reader deciding what to do next
+          needs to know whether they are looking at their own results or an
+          illustration, and how much of it we could actually trace. */}
+      <div className="card card-pad" style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <span className="demo-clock">
+          <span
+            className="dot"
+            style={{ background: computed ? 'var(--st-good)' : 'var(--st-warning)' }}
+            aria-hidden
+          />
+          {computed ? 'Computed from your rows' : 'Illustrative sample data'}
+        </span>
+        <span style={{ fontSize: 12, color: 'var(--ink-2)' }}>
+          {computed
+            ? meta && meta.totalConversions > 0
+              ? `${meta.attributedConversions} of ${meta.totalConversions} results traced to a specific post. Clicks, leads and revenue are measured; impressions, engagement and ad spend need a platform connection.`
+              : 'Clicks, leads and revenue are measured from tracked links and form events. Impressions, engagement and ad spend need a platform connection.'
+            : 'Connect a database and publish a tracked post to see your own numbers here.'}
+        </span>
       </div>
 
       {/* One filter row scoping everything below it */}
@@ -220,8 +281,23 @@ export default function AnalyticsPage() {
         </div>
         <div className="card stat-tile">
           <div className="st-label">Cost per lead</div>
-          <div className="st-value">{totals.spend > 0 ? `$${(totals.spend / Math.max(totals.leads, 1)).toFixed(2)}` : '$0'}</div>
-          <div className="st-delta flat">{totals.spend > 0 ? `${fmtMoney(totals.spend)} promoted spend` : 'no paid promotion'}</div>
+          {/* "$0" here would read as "these leads were free", which is a
+              claim we cannot make without ad-account data. Not measured is
+              the truthful answer until Perception reads spend. */}
+          <div className="st-value">
+            {totals.spend === null
+              ? <span style={{ color: 'var(--muted)' }}>Not measured</span>
+              : totals.spend > 0
+                ? `$${(totals.spend / Math.max(totals.leads, 1)).toFixed(2)}`
+                : '$0'}
+          </div>
+          <div className="st-delta flat">
+            {totals.spend === null
+              ? 'needs an ad account connected'
+              : totals.spend > 0
+                ? `${fmtMoney(totals.spend)} promoted spend`
+                : 'no paid promotion'}
+          </div>
         </div>
       </div>
 
@@ -302,7 +378,7 @@ export default function AnalyticsPage() {
                       <ChannelIcon channel={ch.channel} size={15} /> {CHANNEL_META[ch.channel].label}
                     </span>
                   </td>
-                  <td className="num">{ch.impressions.toLocaleString('en-US')}</td>
+                  <td className="num">{measured(ch.impressions, (n) => n.toLocaleString('en-US'))}</td>
                   <td className="num">{ch.clicks.toLocaleString('en-US')}</td>
                   <td className="num" style={{ fontWeight: 650 }}>
                     {ch.leads}
@@ -310,7 +386,7 @@ export default function AnalyticsPage() {
                   <td className="num">{ch.conversions}</td>
                   <td className="num">{ch.clicks > 0 ? `${Math.round((ch.leads / ch.clicks) * 100)}%` : '—'}</td>
                   <td className="num">{ch.revenue > 0 ? fmtMoney(ch.revenue) : '—'}</td>
-                  <td className="num">{ch.spend > 0 ? fmtMoney(ch.spend) : '—'}</td>
+                  <td className="num">{measured(ch.spend, fmtMoney)}</td>
                 </tr>
               ))}
             </tbody>

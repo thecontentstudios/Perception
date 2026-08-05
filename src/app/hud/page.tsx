@@ -129,19 +129,26 @@ export default function HudPage() {
         const cur = map.get(ch.channel);
         if (!cur) map.set(ch.channel, { ...ch });
         else {
-          cur.impressions += ch.impressions;
+          // Null propagates through a sum: an unmeasured metric plus a known
+          // one is still unmeasured, not the known one.
+          cur.impressions =
+            cur.impressions === null || ch.impressions === null ? null : cur.impressions + ch.impressions;
+          cur.spend = cur.spend === null || ch.spend === null ? null : cur.spend + ch.spend;
           cur.clicks += ch.clicks;
           cur.leads += ch.leads;
           cur.conversions += ch.conversions;
           cur.revenue += ch.revenue;
-          cur.spend += ch.spend;
         }
       }
     }
     return [...map.values()].sort((a, b) => b.leads - a.leads);
   }, [visibleCampaigns]);
 
-  const totalSpend = byChannel.reduce((s, c) => s + c.spend, 0);
+  // Spend is only knowable once an ad account is connected, so a total is
+  // only meaningful when every channel reported one.
+  const totalSpend = byChannel.some((c) => c.spend === null)
+    ? null
+    : byChannel.reduce((s, c) => s + (c.spend ?? 0), 0);
   const totalLeads = byChannel.reduce((s, c) => s + c.leads, 0);
   const maxLeads = Math.max(...byChannel.map((c) => c.leads), 1);
   const topChannel = byChannel[0]?.channel;
@@ -186,9 +193,19 @@ export default function HudPage() {
         </div>
         <div className="card stat-tile">
           <div className="st-label">Paid spend tracked</div>
-          <div className="st-value">{fmtMoney(totalSpend)}</div>
+          {/* Showing $0 would claim these results were free. Until an ad
+              account is connected the truthful answer is that we don't know. */}
+          <div className="st-value">
+            {totalSpend === null
+              ? <span style={{ color: 'var(--muted)' }}>Not measured</span>
+              : fmtMoney(totalSpend)}
+          </div>
           <div className="st-delta flat">
-            {totalSpend > 0 && totalLeads > 0 ? `$${(totalSpend / totalLeads).toFixed(2)} blended cost per lead` : 'no paid promotion yet'}
+            {totalSpend === null
+              ? 'connect an ad account to track spend'
+              : totalSpend > 0 && totalLeads > 0
+                ? `$${(totalSpend / totalLeads).toFixed(2)} blended cost per lead`
+                : 'no paid promotion yet'}
           </div>
         </div>
       </div>
@@ -367,7 +384,7 @@ export default function HudPage() {
                   </span>
                   <span className="hb-val">
                     {r.leads}
-                    {r.spend > 0 && (
+                    {r.spend !== null && r.spend > 0 && (
                       <span style={{ display: 'block', fontSize: 10, color: 'var(--muted)', fontWeight: 500 }}>
                         {fmtMoney(r.spend)} spent
                       </span>

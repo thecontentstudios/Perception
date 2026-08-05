@@ -413,15 +413,24 @@ export interface Conversation {
 
 export interface ChannelMetrics {
   channel: Channel;
-  impressions: number;
+  /**
+   * Null means *not measured*, which is not the same as zero.
+   *
+   * Impressions, engagements, and spend live behind platform metrics APIs and
+   * ad accounts this product does not read yet. Reporting them as 0 would tell
+   * an owner their post was never seen — a different and much worse claim than
+   * "we don't know". The UI renders null as "not measured".
+   */
+  impressions: number | null;
+  engagements: number | null;
+  spend: number | null;
+  /** Computed from tracked-link clicks. */
   clicks: number;
-  engagements: number;
   /** goal events attributed to this channel via tracked links */
   leads: number;
   /** completed outcome (booked, purchased, signed up…) */
   conversions: number;
   revenue: number;
-  spend: number;
 }
 
 export interface OutcomeCount {
