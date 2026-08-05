@@ -13,13 +13,17 @@
     "typecheck": "tsc --noEmit",
     "test:ui": "node scripts/ui-test.js",
     "test:unit": "tsx scripts/unit-test.ts",
-    "test": "npm run test:unit && npm run test:ui",
+    "test": "npm run test:unit && npm run test:worker && npm run test:ui",
     "db:seed": "tsx prisma/seed.ts",
     "db:migrate": "prisma migrate dev",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "worker": "tsx worker.ts",
+    "test:worker": "tsx scripts/worker-test.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
+    "bullmq": "^6.0.7",
+    "ioredis": "^6.0.0",
     "next": "^15.4.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"

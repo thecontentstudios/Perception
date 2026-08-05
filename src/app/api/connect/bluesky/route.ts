@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { hasEncryptionKey } from '@/lib/oauth/crypto';
 import { getAccessToken, removeGrant, saveGrant } from '@/lib/oauth/store';
+import { reconcileAccount, reconcileDisconnect } from '@/lib/oauth/reconcile';
 
 /**
  * Bluesky — a connection that genuinely works today, with no app registration,
@@ -104,6 +105,13 @@ export async function POST(request: Request) {
     accountLabel: `@${session.handle}`,
     externalAccountId: session.did,
   });
+  await reconcileAccount({
+    channel: 'bluesky',
+    accountLabel: `@${session.handle}`,
+    externalAccountId: session.did,
+    scopes: ['app-password session'],
+    expiresAt: Date.now() + 60 * 60 * 2 * 1000,
+  });
 
   return NextResponse.json({
     connected: true,
@@ -117,6 +125,7 @@ export async function POST(request: Request) {
 /** DELETE → forget the stored session. */
 export async function DELETE() {
   removeGrant('bluesky');
+  await reconcileDisconnect('bluesky');
   return NextResponse.json({ disconnected: true });
 }
 

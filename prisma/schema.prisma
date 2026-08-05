@@ -269,6 +269,12 @@ model ChannelVariation {
   hashtags      String[]
   assigneeId    String?
   overridden    Boolean         @default(false)
+  /// Set when a worker takes this post to publish it, cleared when it is done.
+  /// Infrastructure state, deliberately not a `status` value: the owner's
+  /// vocabulary is draft/approved/scheduled/published, and a claim that a
+  /// crashed worker never released has to be reclaimable after a timeout —
+  /// which a status enum cannot express.
+  claimedAt     DateTime?
 
   media     VariationMedia[]
   approvals Approval[]

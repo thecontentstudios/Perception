@@ -3,6 +3,7 @@ import { cookies } from 'next/headers';
 import { appUrl, providerFor } from '@/lib/oauth/providers';
 import { safeEqual } from '@/lib/oauth/crypto';
 import { saveGrant } from '@/lib/oauth/store';
+import { reconcileAccount } from '@/lib/oauth/reconcile';
 import type { Channel } from '@/lib/types';
 
 /**
@@ -108,6 +109,17 @@ export async function GET(
           : provider.scopes,
       accountLabel: provider.label,
       externalAccountId: String(payload.user_id ?? payload.open_id ?? 'unknown'),
+    });
+    await reconcileAccount({
+      channel: provider.channel,
+      accountLabel: provider.label,
+      externalAccountId: String(payload.user_id ?? payload.open_id ?? 'unknown'),
+      scopes:
+        typeof payload.scope === 'string'
+          ? payload.scope.split(/[ ,]/).filter(Boolean)
+          : provider.scopes,
+      expiresAt:
+        typeof payload.expires_in === 'number' ? Date.now() + payload.expires_in * 1000 : null,
     });
   } catch (e) {
     return back('error', `Authorized, but the token could not be stored: ${(e as Error).message}`);

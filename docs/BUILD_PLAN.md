@@ -220,3 +220,68 @@ collection counts against the fixtures, which was right for a read-only
 database and wrong the moment the app could write. It now asserts that every
 seeded row is still present, which is both stronger and true of a database
 that grows.
+
+### Phase 1.4 — Queue and worker ✅
+
+`npm run worker` is now the process that makes the calendar mean something.
+Without it "scheduled" is a label on a card. With it, a post goes out at the
+time the owner picked whether or not anyone has the app open.
+
+**Postgres owns the schedule; Redis only executes it.** A poller scans for due
+rows every 30 seconds and enqueues them, rather than enqueueing a delayed job
+at approval time. That division is the important decision:
+
+- If the queue owned the schedule, flushing Redis would silently drop every
+  future post while the calendar still showed them — the product lying to you.
+- Rescheduling in the UI would mean finding and rewriting a Redis job, or
+  forgetting to and having the post fire at the old time. Polling means the
+  calendar is simply the truth: move a card, the next scan sees the new time.
+
+The cost is granularity — a post fires within 30 seconds of its minute. That
+is the right trade for scheduled marketing and the wrong one for anything
+time-critical.
+
+**Claiming is a compare-and-swap**, `updateMany` with the expected state in the
+`WHERE`. Whichever worker gets count 1 owns the job; the other sees 0 and
+stops. A read-then-write would double-post under concurrency, which is the one
+bug the whole file exists to avoid. The claim lives in its own `claimedAt`
+column rather than a `PUBLISHING` status: the owner's vocabulary is
+draft/approved/scheduled/published, and a claim a crashed worker never released
+has to be reclaimable after a timeout — which a status enum can't express.
+
+**Preflight runs again at fire time.** An approval is a statement about the
+post at the moment it was approved. Between then and firing, a connection can
+expire, media can be deleted, a campaign can end. Publishing on a stale
+approval is how a product posts something the owner wouldn't approve today.
+
+**Retry policy distinguishes what a retry can fix.** A rate limit clears on its
+own; a revoked token never does. Retryable failures go back to `SCHEDULED` with
+exponential backoff over four attempts; terminal ones stop and surface, because
+burning three more attempts only delays the owner finding out.
+
+**Idempotency is per (variation, scheduled slot).** Retries of a slot reuse the
+key, so a crashed worker can't turn one post into two — and the BullMQ job id
+*is* that key, so a scan racing a queued job adds nothing. Moving a post to a
+new time deliberately mints a new key: that is a new intent to publish.
+
+**What the acceptance test surfaced.** Running it end to end immediately caught
+a real inconsistency: connecting saved an OAuth grant but never updated the
+`ConnectedAccount` row, so the workspace said "not connected" while the
+publisher held a live token. Preflight blocked the publish — correctly — and
+that was the only reason anyone found out. `src/lib/oauth/reconcile.ts` now
+runs on every connect and disconnect path, so the two halves of "connected"
+can't disagree.
+
+`npm run test:worker` schedules a post seconds out, spawns the worker as a
+separate process, and waits for it to publish against a mock instance that
+speaks real Mastodon over real HTTP — bearer auth, `Idempotency-Key`, the
+status shape the publisher parses. It asserts the post went out, exactly one
+status reached the instance, the attempt and audit rows exist, and replaying
+the job posts nothing new. It skips cleanly when the mock isn't running.
+
+**Local setup**
+
+```bash
+redis-server --port 6380 --daemonize yes   # or set REDIS_URL
+npm run worker                             # in its own terminal
+```

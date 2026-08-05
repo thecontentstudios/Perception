@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { hasEncryptionKey } from '@/lib/oauth/crypto';
 import { removeGrant, saveGrant } from '@/lib/oauth/store';
+import { reconcileAccount, reconcileDisconnect } from '@/lib/oauth/reconcile';
 import { fetchInstanceLimits, mastodonPublisher } from '@/lib/publishers/mastodon';
 
 /**
@@ -105,6 +106,15 @@ export async function POST(request: Request) {
     // host|account|limit — per-instance facts live with the grant they belong to
     externalAccountId: `${host}|${account}|${limit}`,
   });
+  // The grant is only half of "connected" — the workspace row is what every
+  // screen and preflight reads.
+  await reconcileAccount({
+    channel: 'mastodon',
+    accountLabel: `@${account}@${host}`,
+    externalAccountId: `${host}|${account}|${limit}`,
+    scopes: ['write:statuses', 'read:accounts'],
+    expiresAt: null,
+  });
 
   return NextResponse.json({
     connected: true,
@@ -125,5 +135,6 @@ export async function GET() {
 
 export async function DELETE() {
   removeGrant('mastodon');
+  await reconcileDisconnect('mastodon');
   return NextResponse.json({ disconnected: true });
 }

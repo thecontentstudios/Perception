@@ -83,9 +83,36 @@ npm run dev
 
 Open **<http://localhost:3000>** and you're in.
 
-**No configuration is required.** There is no `.env` file to create, no
-database to provision, no OAuth app to register. The prototype runs entirely
-in the browser on an in-memory demo workspace.
+**No configuration is required to look around.** There is no `.env` file to
+create, no database to provision, no OAuth app to register — the app falls
+back to an in-memory demo workspace and tells you so with an amber "Demo data"
+pill in the top bar.
+
+### Running it for real
+
+Three processes turn the prototype into a working product: Postgres for
+durable state, Redis for the publish queue, and a worker that fires scheduled
+posts. Add them when you want changes to survive a reload and posts to go out
+on their own.
+
+```bash
+# 1. Postgres — anything reachable will do
+echo 'DATABASE_URL="postgresql://user@localhost:5432/perception"' > .env
+npm run db:migrate      # apply migrations
+npm run db:seed         # load the demo workspace as real rows
+
+# 2. Redis, for the publish queue
+redis-server --port 6379 --daemonize yes
+echo 'REDIS_URL="redis://127.0.0.1:6379"' >> .env
+
+# 3. Two processes
+npm run dev             # the app
+npm run worker          # scheduled posts, in its own terminal
+```
+
+The top-bar pill turns green and reads **Database** once rows are loading from
+Postgres. With the worker running, a post scheduled two minutes out publishes
+on its own with the browser closed.
 
 ### About the demo data
 
@@ -117,9 +144,16 @@ repeatedly without cleanup.
 | `npm run build` | Production build; fails on type errors |
 | `npm start` | Serve the production build (run `build` first) |
 | `npm run typecheck` | TypeScript check with no emit |
-| `npm run test:unit` | Facet byte offsets, grapheme counting, token crypto, PKCE |
+| `npm run worker` | Publishing worker: scans for due posts, publishes, retries |
+| `npm run db:migrate` | Apply Prisma migrations |
+| `npm run db:seed` | Load the demo workspace into Postgres |
+| `npm run test:unit` | Facet byte offsets, grapheme counting, token crypto, PKCE, read/write path |
+| `npm run test:worker` | Schedules a post, runs the worker, checks it published (needs `node scripts/mock-mastodon.js`) |
 | `npm run test:ui` | Browser suite: nav, panels, drag-drop, discovery, fan-out, live connections (needs the server running) |
-| `npm test` | Both suites |
+| `npm test` | All three suites |
+
+Every suite that needs infrastructure **skips with a note rather than failing**
+when it isn't there, so `npm test` stays green on a fresh clone.
 
 Before pushing, `npm run typecheck && npm run build` is the full gate — the
 build type-checks and pre-renders every route, so a green build means every
