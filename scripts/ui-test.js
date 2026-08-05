@@ -516,6 +516,91 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
     }
   }
 
+  console.log('\n== 11. Tracked links: a click is recorded and lands right ==');
+  {
+    const api = await page.evaluate(() => fetch('/api/workspace').then((r) => r.json()));
+    if (api.source !== 'database') {
+      ok('no database — click tracking skipped by design');
+    } else {
+      // The Phase 2.1 acceptance test: clicking a published post's link writes
+      // a click row and lands on the right page.
+      const published = api.workspace.variations.find((v) => v.status === 'published' && v.cta?.url);
+      if (!published) {
+        bad('no published post with a call to action to track');
+      } else {
+        const mint = await page.evaluate((id) =>
+          fetch('/api/links', {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ variationId: id }),
+          }).then((r) => r.json()), published.id);
+        mint.ok && mint.code ? ok(`minted /r/${mint.code}`) : bad(`could not mint a link: ${mint.reason}`);
+
+        // Minting twice must return the same code, or a post's numbers split.
+        const again = await page.evaluate((id) =>
+          fetch('/api/links', {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ variationId: id }),
+          }).then((r) => r.json()), published.id);
+        again.code === mint.code ? ok('minting is idempotent') : bad(`second mint gave a different code: ${again.code}`);
+
+        const before = await page.evaluate((c) =>
+          fetch(`/api/links?campaignId=${c}`).then((r) => r.json()), published.campaignId);
+        const beforeClicks = before.links.find((l) => l.code === mint.code)?.clicks ?? 0;
+
+        // Check the redirect itself from Node, not the page: a browser's
+        // `redirect: 'manual'` yields an opaque response (status 0, no
+        // headers) by spec, so the Location header is only readable here.
+        const hop = await fetch(`http://localhost:3000/r/${mint.code}`, { redirect: 'manual' });
+        const location = hop.headers.get('location') || '';
+        hop.status === 302 ? ok('redirect is a 302') : bad(`expected 302, got ${hop.status}`);
+        location.startsWith(mint.targetUrl.split('?')[0])
+          ? ok('lands on the campaign’s own page')
+          : bad(`redirected somewhere unexpected: ${location}`);
+        const q = new URL(location).searchParams;
+        q.get('utm_campaign') && q.get('utm_source') && q.get('utm_content') === published.id
+          ? ok(`UTMs appended and name the post (${q.get('utm_source')}/${q.get('utm_campaign')})`)
+          : bad(`missing or wrong UTMs: ${location}`);
+        hop.headers.get('set-cookie')?.includes('pcp_a')
+          ? ok('attribution cookie set for a later conversion to join on')
+          : bad('no attribution cookie on the redirect');
+
+        // Now the click from the browser, which carries a cookie jar and so
+        // exercises the repeat-visitor path.
+        await page.evaluate((code) => fetch(`/r/${code}`, { redirect: 'manual' }), mint.code);
+        await page.waitForTimeout(400);
+        const after = await page.evaluate((c) =>
+          fetch(`/api/links?campaignId=${c}`).then((r) => r.json()), published.campaignId);
+        const row = after.links.find((l) => l.code === mint.code);
+        // Two clicks: one from Node, one from the browser.
+        row?.clicks === beforeClicks + 2
+          ? ok(`clicks recorded (${beforeClicks} → ${row.clicks})`)
+          : bad(`expected ${beforeClicks + 2} clicks, got ${row?.clicks}`);
+
+        const target = row?.targetUrl ?? '';
+        target.startsWith('http') ? ok(`target is a real URL (${target})`) : bad(`bad target: ${target}`);
+
+        // A second click from the same browser is the same visitor. Counting
+        // clicks as visitors is how a campaign looks twice as effective as it
+        // was, so the two numbers have to move independently.
+        await page.evaluate((code) => fetch(`/r/${code}`, { redirect: 'manual' }), mint.code);
+        await page.waitForTimeout(400);
+        const third = await page.evaluate((c) =>
+          fetch(`/api/links?campaignId=${c}`).then((r) => r.json()), published.campaignId);
+        const r3 = third.links.find((l) => l.code === mint.code);
+        r3.clicks === row.clicks + 1 && r3.visitors === row.visitors
+          ? ok(`repeat click counted, visitor not double-counted (${r3.clicks} clicks, ${r3.visitors} visitors)`)
+          : bad(`expected ${row.clicks + 1} clicks and ${row.visitors} visitors, got ${r3.clicks}/${r3.visitors}`);
+
+        // An unknown code is far more likely a typo than an attack, so it has
+        // to land somewhere useful rather than 404 or 500.
+        const missing = await fetch('http://localhost:3000/r/nosuchcode', { redirect: 'manual' });
+        missing.status === 302 && (missing.headers.get('location') || '').endsWith('/')
+          ? ok('an unknown code redirects home rather than erroring')
+          : bad(`unknown code gave ${missing.status} → ${missing.headers.get('location')}`);
+      }
+    }
+  }
+
   console.log('\n' + (errors.length ? 'PAGE ERRORS:\n' + errors.join('\n') : 'no page errors'));
   console.log(fail.length ? `\n${fail.length} FAILURE(S)` : '\nALL CHECKS PASSED');
   await browser.close();

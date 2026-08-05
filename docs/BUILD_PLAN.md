@@ -327,3 +327,37 @@ both attempts are recorded in order.
 Close the laptop, reopen it an hour later, and the scheduled post went out.
 That was the phase gate, and it holds. Phase 2 is next: making the reporting
 true.
+
+### Phase 2.1 — Tracked links ✅
+
+`GET /r/<code>` records the click, sets a first-party attribution cookie, and
+302s to the campaign's page with UTMs appended.
+
+**One link per variation, not per campaign.** A campaign-wide link answers "did
+the campaign work". Only a per-post link answers "*which post* worked", which
+is the question the learning loop in Phase 3 is built on and the reason to
+mint links at all.
+
+**Redirect first, record second.** A real person is waiting on this route, so
+a slow or failing database must never leave them looking at a blank tab. The
+click write is wrapped and swallowed: a click we failed to record is a number
+we lose, and a broken link is worse by a wide margin.
+
+**Clicks and visitors are counted separately.** Reporting one as the other is
+how a campaign comes out looking twice as effective as it was. A repeat click
+from the same browser increments clicks and not visitors, and the suite asserts
+exactly that.
+
+Two smaller calls worth naming. Existing UTMs on the target win — if someone
+deliberately wrote `?utm_source=newsletter` into their own link, overwriting it
+is us second-guessing them. And an unknown code redirects home rather than
+404ing, because it is far more likely a typo or an old link than an attack.
+
+The cookie is first-party and holds an opaque id we generated. No
+fingerprinting, no third-party pixel, nothing that follows anyone off the
+domain — the only question being asked is whether the click that brought you
+here came from one of our posts.
+
+Ten checks cover it: minting is idempotent, the redirect is a 302 to the right
+page, UTMs name the post, the attribution cookie is set, clicks land, repeat
+visitors aren't double-counted, and an unknown code recovers.
