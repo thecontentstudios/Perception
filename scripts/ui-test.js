@@ -424,6 +424,96 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
     } else {
       ok('running on fixtures — badge and hydration check skipped by design');
     }
+
+    console.log('\n== 10. Write path: a change survives a reload ==');
+    if (api.source !== 'database') {
+      ok('no database — durability check skipped by design');
+    } else {
+      // The Phase 1.3 acceptance test, exactly as written: drag a card,
+      // reload the page, it stays moved. Everything else in the write path is
+      // detail; this is the claim.
+      await page.goto('http://localhost:3000/calendar', { waitUntil: 'networkidle' });
+      await page.waitForTimeout(700);
+
+      // Pick a card that is actually on screen, and a visible empty-ish day in
+      // the same grid to drop it on.
+      const picked = await page.evaluate(() => {
+        const card = document.querySelector('.cal-card[data-variation-id]');
+        if (!card) return null;
+        const from = card.closest('.cal-day')?.getAttribute('data-date');
+        const days = [...document.querySelectorAll('.cal-day[data-date]')].map((d) => d.getAttribute('data-date'));
+        const to = days.find((d) => d !== from);
+        return { id: card.getAttribute('data-variation-id'), from, to };
+      });
+      if (!picked || !picked.to) {
+        bad('could not find a calendar card and a target day');
+      } else {
+        const beforeAt = api.workspace.variations.find((v) => v.id === picked.id)?.scheduledAt;
+
+        // The card uses HTML5 drag-and-drop, which mouse.down/move/up does not
+        // trigger in Chromium. Dispatching the real events with a shared
+        // DataTransfer is how you exercise the actual handlers rather than a
+        // parallel code path invented for the test.
+        await page.evaluate(([id, to]) => {
+          const card = document.querySelector(`.cal-card[data-variation-id="${id}"]`);
+          const day = document.querySelector(`.cal-day[data-date="${to}"]`);
+          const dt = new DataTransfer();
+          card.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: dt }));
+          day.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }));
+          day.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+          card.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: dt }));
+        }, [picked.id, picked.to]);
+        await page.waitForTimeout(300);
+
+        const landed = await page.evaluate((id) =>
+          document.querySelector(`.cal-card[data-variation-id="${id}"]`)?.closest('.cal-day')?.getAttribute('data-date'),
+          picked.id
+        );
+        landed === picked.to
+          ? ok(`drag moved the card in the UI (${picked.from} → ${picked.to})`)
+          : bad(`drag did not move the card: still on ${landed}`);
+
+        // The write is queued, not awaited — give the chain a moment to land.
+        await page.waitForTimeout(900);
+        await page.reload({ waitUntil: 'networkidle' });
+        await page.waitForTimeout(900);
+        const after = await page.evaluate((id) =>
+          document.querySelector(`.cal-card[data-variation-id="${id}"]`)?.closest('.cal-day')?.getAttribute('data-date'),
+          picked.id
+        );
+        after === picked.to
+          ? ok(`card stayed moved across a reload (${picked.from} → ${picked.to})`)
+          : bad(`card reverted on reload: expected ${picked.to}, got ${after}`);
+
+        // Rescheduling moves the day and keeps the time of day, the way the
+        // reducer does — a post that silently jumps to noon is a bug.
+        const row = await page.evaluate(() => fetch('/api/workspace').then((r) => r.json()));
+        const now = row.workspace.variations.find((v) => v.id === picked.id);
+        !beforeAt || now.scheduledAt.slice(11) === beforeAt.slice(11)
+          ? ok(`time of day preserved (${now.scheduledAt.slice(11)})`)
+          : bad(`time of day changed: ${beforeAt.slice(11)} → ${now.scheduledAt.slice(11)}`);
+
+        // Put it back so the suite is re-runnable.
+        await page.evaluate(async ([id, at]) => {
+          await fetch('/api/mutate', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ mutation: { type: 'setScheduledAt', variationId: id, scheduledAt: at } }),
+          });
+        }, [picked.id, beforeAt]);
+      }
+
+      // A route that persists anything a client names is a mass-assignment
+      // hole; the durable set is a whitelist and has to behave like one.
+      const rejected = await page.evaluate(() =>
+        fetch('/api/mutate', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ mutation: { type: 'setBrand', brandId: 'b-green' } }),
+        }).then((r) => r.status)
+      );
+      rejected === 400 ? ok('non-durable action rejected (400)') : bad(`expected 400 for a UI-only action, got ${rejected}`);
+    }
   }
 
   console.log('\n' + (errors.length ? 'PAGE ERRORS:\n' + errors.join('\n') : 'no page errors'));

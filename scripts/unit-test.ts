@@ -152,10 +152,21 @@ async function readPathChecks() {
   try {
     const w = await loadWorkspace(fx.ORG.id);
 
-    eq(w.campaigns.length, fx.CAMPAIGNS.length, 'every campaign came back');
-    eq(w.items.length, fx.CONTENT_ITEMS.length, 'every content item came back');
-    eq(w.variations.length, fx.VARIATIONS.length, 'every variation came back');
-    eq(w.destinations.length, fx.DESTINATIONS.length, 'every destination came back');
+    // Presence, not equality. Once the write path exists the database is a
+    // superset of the seed — a destination discovered during a connect flow is
+    // a row the fixtures never had, and asserting counts would call that a
+    // regression. What must hold is that nothing seeded went missing.
+    const allPresent = <T extends { id: string }>(got: T[], want: T[], label: string) => {
+      const have = new Set(got.map((x) => x.id));
+      const lost = want.filter((x) => !have.has(x.id)).map((x) => x.id);
+      lost.length === 0
+        ? ok(`every seeded ${label} came back (${got.length} rows)`)
+        : bad(`${label} missing from the read path: ${lost.join(', ')}`);
+    };
+    allPresent(w.campaigns, fx.CAMPAIGNS, 'campaign');
+    allPresent(w.items, fx.CONTENT_ITEMS, 'content item');
+    allPresent(w.variations, fx.VARIATIONS, 'variation');
+    allPresent(w.destinations, fx.DESTINATIONS, 'destination');
 
     // Dates are the fragile part: the UI compares 'YYYY-MM-DD' strings, so a
     // Date leaking through — or a timezone shifting one — breaks the calendar
@@ -201,6 +212,65 @@ async function readPathChecks() {
     badChannel
       ? bad(`variation channel '${badChannel.channel}' is not a domain channel`)
       : ok('every channel value is a legal domain channel');
+    console.log('\n== Write path: the server derives what the reducer derives ==');
+    const { applyMutation } = await import('../src/lib/mutations');
+
+    // Approving is two rows, one user action. Forgetting the second leaves the
+    // approvals queue showing work that is already done.
+    {
+      const pending = await db.approval.findFirst({ where: { decision: 'PENDING' } });
+      if (!pending) {
+        console.log('  SKIP no pending approval in the seed');
+      } else {
+        const before = await db.channelVariation.findUnique({ where: { id: pending.variationId } });
+        await applyMutation(fx.ORG.id, { type: 'setStatus', variationId: pending.variationId, status: 'approved' });
+        const after = await db.approval.findUnique({ where: { id: pending.id } });
+        eq(after?.decision, 'APPROVED', 'approving a post also decides its pending approval');
+        after?.decidedAt ? ok('decision timestamped') : bad('approval decided with no decidedAt');
+        // Restore.
+        await db.approval.update({ where: { id: pending.id }, data: { decision: 'PENDING', decidedAt: null } });
+        await db.channelVariation.update({ where: { id: pending.variationId }, data: { status: before!.status } });
+      }
+    }
+
+    // A route that writes whatever the client names is a mass-assignment hole.
+    // The whitelist has to hold even when the field exists on the model.
+    {
+      const v = await db.channelVariation.findFirst({ where: { status: 'DRAFT' } });
+      if (!v) {
+        console.log('  SKIP no draft variation in the seed');
+      } else {
+        await applyMutation(fx.ORG.id, {
+          type: 'updateVariation',
+          variationId: v.id,
+          patch: { body: 'edited by the test', status: 'PUBLISHED', publishedAt: new Date().toISOString() },
+        });
+        const after = await db.channelVariation.findUnique({ where: { id: v.id } });
+        eq(after?.body, 'edited by the test', 'a whitelisted field is written');
+        eq(after?.status, v.status, 'status ignored — it is not the composer’s to set');
+        eq(after?.publishedAt, v.publishedAt, 'publishedAt ignored — only publishing sets that');
+        eq(after?.overridden, true, 'editing marks the variation overridden');
+        await db.channelVariation.update({
+          where: { id: v.id },
+          data: { body: v.body, overridden: v.overridden },
+        });
+      }
+    }
+
+    // Toggle is an intent to flip, not a target value; applying it twice has to
+    // land back where it started or the connections screen lies.
+    {
+      const d = await db.publishDestination.findFirst();
+      if (d) {
+        await applyMutation(fx.ORG.id, { type: 'toggleDestination', destinationId: d.id });
+        const mid = await db.publishDestination.findUnique({ where: { id: d.id } });
+        await applyMutation(fx.ORG.id, { type: 'toggleDestination', destinationId: d.id });
+        const end = await db.publishDestination.findUnique({ where: { id: d.id } });
+        mid?.enabled !== d.enabled && end?.enabled === d.enabled
+          ? ok('toggling a destination twice returns it to its original state')
+          : bad('destination toggle is not an involution');
+      }
+    }
   } catch (e) {
     bad(`read path threw: ${(e as Error).message}`);
   } finally {

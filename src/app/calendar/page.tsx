@@ -133,6 +133,7 @@ export default function CalendarPage() {
                     <div
                       key={dateKey}
                       className={`cal-day ${isSameMonth(dateKey, anchor) ? '' : 'dim'} ${dateKey === TODAY ? 'today' : ''} ${dropDay === dateKey ? 'drop' : ''}`}
+                      data-date={dateKey}
                       {...dropHandlers(dateKey)}
                     >
                       <span className="dnum">

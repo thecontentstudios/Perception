@@ -428,6 +428,16 @@ h4 {
   background: var(--st-good);
 }
 
+/* Sits between the topbar and the page, full width, impossible to scroll past
+   without noticing — which is the point. */
+.sync-error {
+  padding: 9px 20px;
+  font-size: 12.5px;
+  color: var(--st-critical);
+  background: color-mix(in srgb, var(--st-critical) 11%, var(--surface-1));
+  border-bottom: 1px solid color-mix(in srgb, var(--st-critical) 30%, transparent);
+}
+
 .avatar {
   width: 30px;
   height: 30px;

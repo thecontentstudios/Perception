@@ -87,7 +87,7 @@ const NAV_SECTIONS: { label: string; items: NavItem[] }[] = [
 
 export function Shell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  const { state, dispatch, source } = useApp();
+  const { state, dispatch, source, saving, syncError } = useApp();
   const [railed, setRailed] = usePersisted('perception.nav.railed', false);
 
   const openInbox = state.conversations.filter((c) => c.status === 'open').length;
@@ -173,6 +173,7 @@ export function Shell({ children }: { children: ReactNode }) {
           <span className="spacer" />
           <span
             className="demo-clock"
+            data-source={source}
             title={
               source === 'database'
                 ? 'Loaded from Postgres — changes persist.'
@@ -184,7 +185,7 @@ export function Shell({ children }: { children: ReactNode }) {
               style={{ background: source === 'database' ? 'var(--st-good)' : 'var(--st-warning)' }}
               aria-hidden
             />
-            {source === 'database' ? 'Database' : 'Demo data'}
+            {source === 'database' ? (saving > 0 ? 'Saving…' : 'Database') : 'Demo data'}
           </span>
           <span className="demo-clock" title="The prototype clock is pinned so live, scheduled, and failed items all have examples.">
             {fmtLong(TODAY)}
@@ -193,6 +194,13 @@ export function Shell({ children }: { children: ReactNode }) {
             DR
           </span>
         </header>
+        {syncError && (
+          // A change that looked saved and wasn't is the worst failure this
+          // app can have, so it gets a banner rather than a console warning.
+          <div className="sync-error" role="alert">
+            <strong>Not saved.</strong> {syncError}
+          </div>
+        )}
         {children}
       </div>
     </div>

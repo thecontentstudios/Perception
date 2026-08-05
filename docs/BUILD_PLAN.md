@@ -158,3 +158,65 @@ data would be worse than no badge at all.
 One honest caveat: the fixtures are still imported, deliberately, as the
 first-paint fallback. They are no longer the *source* — they are the
 seed data and the offline default.
+
+### Phase 1.3 — Write path ✅
+
+**The reducer stays.** That was the design decision worth getting right.
+Replacing every mutation with an awaited server action would have made the app
+feel worse — dragging a card is instant *because* nothing blocks on the
+network. So the reducer remains the optimistic local model and a sidecar
+mirrors the same actions into Postgres:
+
+- **`src/lib/mutations.ts`** — thirteen durable actions → Prisma writes. The
+  durable set is named in one place rather than scattered through `if`
+  statements, because "does this belong in the database" is a judgement worth
+  reviewing. `setBrand` is a view filter; the publish-job actions belong to the
+  worker in 1.4.
+- **`src/app/api/mutate/route.ts`** — one endpoint. Thirteen routes would be
+  thirteen files doing the same three things.
+- **`src/lib/persist.ts`** — the client queue.
+
+**Mirroring has to be exact.** Where the reducer derives something, the server
+derives it identically or the two silently diverge:
+
+- Reschedule moves the day and *keeps the time of day*, so the server re-reads
+  the row to learn what that time was. A post that jumps to noon on drop is a
+  bug you find a week later.
+- Approving is two rows: the variation's status and the pending `Approval`.
+  Miss the second and the approvals queue keeps showing finished work.
+- Toggling a destination is an intent to flip, not a target value — so it is a
+  read-then-write, and applying it twice is an involution.
+
+**Two things that are easy to get wrong and were:**
+
+*Order.* Dragging a card twice in a second issues two writes for the same row.
+Fired in parallel they can land in either order and the loser wins — the card
+snaps back to where it was two drags ago. Writes go through a single promise
+chain instead.
+
+*Identity.* A duplicated variation and a freshly discovered destination invent
+ids. Minting them separately on client and server gives you an optimistic card
+with no row behind it, so they are minted once in the dispatch wrapper and
+handed to both.
+
+**Safety.** `/api/mutate` is a public endpoint. Patchable fields are a
+whitelist — the composer may set `body`, not `status` or `publishedAt` — and
+an action outside the durable set returns 400 rather than being helpfully
+interpreted. Both are asserted in the suite.
+
+**Failures are visible.** A write that fails silently is the worst outcome
+available here: the screen shows the change, the user believes it, and it is
+gone on reload. Failed writes raise a banner under the topbar, and the badge
+reads "Saving…" while writes are in flight.
+
+**Verified against the acceptance test, literally.** The suite drags a real
+card with real HTML5 drag events — `mouse.down/move/up` does not trigger
+`dragstart` in Chromium, so an earlier version of this check was passing
+without exercising the handlers at all — reloads the page, and asserts the card
+is still on the new day with its time of day intact.
+
+One assertion had to change with this step: the read-path test compared
+collection counts against the fixtures, which was right for a read-only
+database and wrong the moment the app could write. It now asserts that every
+seeded row is still present, which is both stronger and true of a database
+that grows.

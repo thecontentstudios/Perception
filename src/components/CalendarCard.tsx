@@ -42,6 +42,7 @@ export function CalendarCard({
     <button
       type="button"
       className={`cal-card ${dragging ? 'dragging' : ''}`}
+      data-variation-id={v.id}
       style={{ borderLeftColor: color.line, background: v.status === 'failed' ? 'rgba(208,59,59,0.05)' : undefined }}
       onClick={() => onOpen(v.id)}
       draggable={draggable}

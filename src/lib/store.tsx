@@ -1,11 +1,16 @@
 'use client';
 
-import { createContext, useContext, useEffect, useMemo, useReducer, useState, type ReactNode } from 'react';
+import {
+  createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState,
+  type ReactNode,
+} from 'react';
 import {
   ACCOUNTS, APPROVALS, AUDIT, BRANDS, CAMPAIGNS, CONTACTS, CONTENT_ITEMS,
   CONVERSATIONS, DESTINATIONS, DISCOVERABLE_DESTINATIONS, MEDIA, ORG, PERFORMANCE, SEGMENTS, TEMPLATES, TODAY, USERS, VARIATIONS,
 } from './demo-data';
 import { preflight, type PreflightContext } from './preflight';
+import { onPendingChange, onSyncError, persist } from './persist';
+import type { Mutation } from './mutations';
 import { dateKeyOf } from './dates';
 import { CHANNEL_META } from './channels';
 import type {
@@ -50,7 +55,9 @@ type Action =
   | { type: 'startJobs'; jobs: PublishJob[] }
   | { type: 'advanceJob'; jobId: string; stage: PublishJob['stage']; error?: string | null; externalId?: string | null }
   | { type: 'retryJob'; jobId: string }
-  | { type: 'duplicateVariation'; variationId: string }
+  // newId is minted by the dispatch wrapper rather than the reducer, so the
+  // optimistic copy and the row written to Postgres share one identity.
+  | { type: 'duplicateVariation'; variationId: string; newId?: string }
   | { type: 'addCampaign'; campaign: Campaign; items: ContentItem[]; variations: ChannelVariation[]; auditDetail: string };
 
 let dupSeq = 1;
@@ -238,7 +245,7 @@ function reducer(state: AppState, a: Action): AppState {
       if (!src) return state;
       const copy: ChannelVariation = {
         ...src,
-        id: `${src.id}-copy${dupSeq++}`,
+        id: a.newId ?? `${src.id}-copy${dupSeq++}`,
         status: 'draft',
         publishedAt: null,
         failure: null,
@@ -277,6 +284,10 @@ export interface AppApi {
   dispatch: (a: Action) => void;
   /** Where the data on screen came from. */
   source: 'loading' | 'database' | 'fixtures';
+  /** Writes issued but not yet acknowledged. */
+  saving: number;
+  /** Set when a change could not be stored — shown, never swallowed. */
+  syncError: string | null;
   // lookups
   campaignById: (id: string) => Campaign | undefined;
   brandById: (id: string) => Brand | undefined;
@@ -298,9 +309,98 @@ export interface AppApi {
 
 const Ctx = createContext<AppApi | null>(null);
 
+/**
+ * Which dispatched actions become database writes, and with what payload.
+ *
+ * Most map across unchanged. The two that don't are the ones that invent an
+ * id: a duplicated variation and a freshly discovered destination list. Those
+ * ids have to be identical on both sides, so they are minted here — once — and
+ * handed to the reducer and the server together. Deriving them separately is
+ * how you end up with an optimistic card that has no row behind it.
+ *
+ * Returning `null` means "local only", and that is a real answer for
+ * `setBrand` (a view filter), `hydrate` (internal), and the publish-job
+ * actions (the worker owns those in Phase 1.4).
+ */
+function toMutation(a: Action, state: AppState): Mutation | null {
+  switch (a.type) {
+    case 'reschedule':
+    case 'setScheduledAt':
+    case 'setStatus':
+    case 'bulkSetStatus':
+    case 'setAltText':
+    case 'conversationStatus':
+    case 'toggleDestination':
+    case 'mapDestination':
+    case 'reconnect':
+    case 'connectAccount':
+      return a;
+
+    case 'updateVariation':
+      return { type: 'updateVariation', variationId: a.variationId, patch: a.patch as Record<string, unknown> };
+
+    case 'duplicateVariation': {
+      const src = state.variations.find((v) => v.id === a.variationId);
+      if (!src || !a.newId) return null;
+      // Mirror the reducer's rule: a copy of a past-dated post lands today,
+      // not in the past, where nothing can ever publish it.
+      const scheduledAt = src.scheduledAt
+        ? `${dateKeyOf(src.scheduledAt) < TODAY ? TODAY : dateKeyOf(src.scheduledAt)}${src.scheduledAt.slice(10)}`
+        : null;
+      return { type: 'duplicateVariation', sourceId: a.variationId, newId: a.newId, scheduledAt };
+    }
+
+    case 'discoverDestinations': {
+      if (state.destinations.some((d) => d.accountId === a.accountId)) return null;
+      const found = (DISCOVERABLE_DESTINATIONS[a.channel] ?? []).map((d, i) => ({
+        id: `d-${a.accountId}-${i}`,
+        name: d.name, kind: d.kind, externalId: d.externalId,
+        followers: d.followers, issues: d.issues, hue: d.hue,
+      }));
+      return found.length > 0 ? { type: 'discoverDestinations', accountId: a.accountId, channel: a.channel, found } : null;
+    }
+
+    default:
+      return null;
+  }
+}
+
 export function AppProvider({ children }: { children: ReactNode }) {
-  const [state, dispatch] = useReducer(reducer, initialState);
+  const [state, rawDispatch] = useReducer(reducer, initialState);
   const [source, setSource] = useState<'loading' | 'database' | 'fixtures'>('loading');
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(0);
+
+  // The reducer state the wrapper reads when building a mutation. A ref rather
+  // than the closed-over `state` so two dispatches in the same tick each see
+  // the value the previous one produced.
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const persistent = useRef(false);
+  persistent.current = source === 'database';
+
+  useEffect(() => {
+    onSyncError(setSyncError);
+    onPendingChange(setSaving);
+  }, []);
+
+  /**
+   * Dispatch, then mirror. The reducer runs first and synchronously, which is
+   * the whole point: the card moves under the cursor, and the write catches up.
+   */
+  const dispatch = useCallback((a: Action) => {
+    if (!persistent.current) {
+      rawDispatch(a);
+      return;
+    }
+    const enriched: Action =
+      a.type === 'duplicateVariation' && !a.newId
+        ? { ...a, newId: `${a.variationId}-copy${Date.now().toString(36)}` }
+        : a;
+    rawDispatch(enriched);
+    const m = toMutation(enriched, stateRef.current);
+    if (m) persist(m);
+  }, []);
 
   /**
    * Hydrate from Postgres when it's available, otherwise keep the fixtures.
@@ -378,6 +478,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       state,
       dispatch,
       source,
+      saving,
+      syncError,
       destinationById,
       destinationsForAccount,
       publishableDestinations,
@@ -391,7 +493,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       visibleCampaigns,
       preflightFor,
     };
-  }, [state, source]);
+  }, [state, source, saving, syncError, dispatch]);
 
   return <Ctx.Provider value={api}>{children}</Ctx.Provider>;
 }
