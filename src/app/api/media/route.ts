@@ -3,7 +3,8 @@ import { db, dbAvailable } from '@/lib/db';
 import { ingest, guessType, IngestError } from '@/lib/media/ingest';
 import { storage } from '@/lib/storage';
 import { suggestAltText } from '@/lib/media/alt-text';
-import { ORG } from '@/lib/demo-data';
+import { handle, require_ } from '@/lib/auth/guard';
+import { sameOrigin } from '@/lib/request';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,9 +15,16 @@ export const dynamic = 'force-dynamic';
  * base64 their own photo would be absurd.
  */
 export async function POST(req: Request) {
+  return handle(async () => {
   if (!(await dbAvailable())) {
     return NextResponse.json({ ok: false, reason: 'no-database' }, { status: 503 });
   }
+  if (!sameOrigin(req)) {
+    return NextResponse.json({ ok: false, reason: 'cross-origin request refused' }, { status: 403 });
+  }
+  // Uploading spends storage and CPU (sharp re-encodes every image), so it is
+  // gated on being able to make content at all.
+  const principal = await require_('create_content');
 
   let form: FormData;
   try {
@@ -30,7 +38,15 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, reason: 'no file in the upload' }, { status: 400 });
   }
 
-  const brandId = (form.get('brandId') as string) || null;
+  // A brand id from the client has to be one of ours, or the asset lands in
+  // another tenant's library.
+  const requestedBrand = (form.get('brandId') as string) || null;
+  const brandId = requestedBrand
+    ? (await db.brand.findFirst({
+        where: { id: requestedBrand, organizationId: principal.organizationId },
+        select: { id: true },
+      }))?.id ?? null
+    : null;
   const data = Buffer.from(await file.arrayBuffer());
   // Browsers sometimes send an empty or wrong type; the extension is the
   // better hint, and the bytes are checked either way during ingest.
@@ -51,7 +67,7 @@ export async function POST(req: Request) {
 
   const asset = await db.mediaAsset.create({
     data: {
-      organizationId: ORG.id,
+      organizationId: principal.organizationId,
       brandId,
       kind: result.kind,
       storageKey: result.key,
@@ -64,7 +80,7 @@ export async function POST(req: Request) {
       // Proposed, never assumed. The owner edits it before it counts.
       altText: null,
       tags: [],
-      uploadedById: 'u-dana',
+      uploadedById: principal.userId,
     },
   });
 
@@ -85,5 +101,6 @@ export async function POST(req: Request) {
     stripped: result.strippedFields,
     normalized: result.normalized,
     altTextSuggestion: suggestAltText(file.name, result),
+  });
   });
 }

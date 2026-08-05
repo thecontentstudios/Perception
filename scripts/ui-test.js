@@ -24,6 +24,23 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
 
+  // Sign in first.
+  //
+  // Every database-backed section below checks whether it is looking at real
+  // rows and skips if not — which, once auth landed, meant six sections
+  // quietly stopped running and the suite passed by doing nothing. An
+  // authenticated browser is also simply what a real session looks like.
+  await page.goto('http://localhost:3000/login', { waitUntil: 'domcontentloaded' });
+  const signedIn = await page.evaluate(() =>
+    fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: 'dana@summitlocal.co', password: 'demo-password-change-me' }),
+    }).then((r) => r.json())
+  );
+  console.log('\n== 0. Session ==');
+  signedIn.ok ? ok(`signed in as ${signedIn.user.name} (${signedIn.user.role})`) : bad(`could not sign in: ${signedIn.reason}`);
+
   // Layout preferences persist by design, so a previous run must not leak
   // into this one (collapsed groups would hide the elements later checks click).
   await page.goto('http://localhost:3000/', { waitUntil: 'domcontentloaded' });
@@ -638,7 +655,11 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
       const clickId = landing.searchParams.get('pcp_click');
       clickId ? ok('the redirect hands the landing page a click id') : bad('no pcp_click on the landing URL');
 
-      const before = await fetch(`http://localhost:3000/api/events?campaignId=${published.campaignId}`).then((r) => r.json());
+      // Through the page: /api/events?campaignId= is a reporting read and
+      // needs the session cookie the browser is holding.
+      const readTotals = (c) =>
+        page.evaluate((id) => fetch(`/api/events?campaignId=${id}`).then((r) => r.json()), c);
+      const before = await readTotals(published.campaignId);
 
       // A fixed eventId makes the conversion idempotent — which is the point
       // of the duplicate check below, and the reason the *counted* events need
@@ -662,7 +683,7 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
         : bad(`not attributed: ${JSON.stringify(evt.body)}`);
       evt.cors === '*' ? ok('answers cross-origin, as a site snippet needs') : bad(`no CORS header: ${evt.cors}`);
 
-      const after = await fetch(`http://localhost:3000/api/events?campaignId=${published.campaignId}`).then((r) => r.json());
+      const after = await readTotals(published.campaignId);
       after.total === before.total + 1
         ? ok(`campaign total moved (${before.total} → ${after.total})`)
         : bad(`expected ${before.total + 1}, got ${after.total}`);
@@ -673,7 +694,7 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
 
       // A double-submitted form is one lead, not two.
       const dup = await post({ kind: 'quote_request', clickId, valueCents: 45000, eventId: `${run}-1` }, 'https://greenscapenj.com');
-      const afterDup = await fetch(`http://localhost:3000/api/events?campaignId=${published.campaignId}`).then((r) => r.json());
+      const afterDup = await readTotals(published.campaignId);
       dup.body.ok && afterDup.total === after.total
         ? ok('a re-submitted form counts once')
         : bad(`duplicate created a second conversion (${after.total} → ${afterDup.total})`);
@@ -687,14 +708,22 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
 
       // Unattributed is accepted and reported as such — never discarded, never
       // quietly credited to a campaign.
-      const orphan = await post({ kind: 'call', eventId: `${run}-3` }, 'https://greenscapenj.com');
-      const all = await fetch('http://localhost:3000/api/events').then((r) => r.json());
+      // Unattributed, but still says which workspace it belongs to — which is
+      // what the snippet does, and what the endpoint now requires.
+      const orphan = await post(
+        { kind: 'call', key: 'pk_demo_greenscape_workspace', eventId: `${run}-3` },
+        'https://greenscapenj.com'
+      );
+      const all = await page.evaluate(() => fetch('/api/events').then((r) => r.json()));
       orphan.body.ok && orphan.body.attributed === false && all.unattributed >= 1
         ? ok(`an unattributed conversion is kept and counted separately (${all.attributed} attributed, ${all.unattributed} not)`)
         : bad(`unattributed handling wrong: ${JSON.stringify(orphan.body)}`);
 
       // Bad input is refused rather than stored as something meaningless.
-      const junk = await post({ kind: 'not_a_kind', eventId: `${run}-4` }, 'https://greenscapenj.com');
+      const junk = await post(
+        { kind: 'not_a_kind', key: 'pk_demo_greenscape_workspace', eventId: `${run}-4` },
+        'https://greenscapenj.com'
+      );
       junk.status === 400 ? ok('an unknown kind is rejected') : bad(`unknown kind gave ${junk.status}`);
 
       // Preflight has to succeed or the browser never sends the POST at all.
@@ -751,12 +780,16 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
         ? ok('attribution captured into the site’s own storage')
         : bad(`nothing stored: ${JSON.stringify(stored)}`);
 
-      const before = await fetch(`http://localhost:3000/api/events?campaignId=${published.campaignId}`).then((r) => r.json());
+      // Through the page: /api/events?campaignId= is a reporting read and
+      // needs the session cookie the browser is holding.
+      const readTotals = (c) =>
+        page.evaluate((id) => fetch(`/api/events?campaignId=${id}`).then((r) => r.json()), c);
+      const before = await readTotals(published.campaignId);
 
       await site.click('#quote button[type="submit"]');
       await site.waitForTimeout(1200);
 
-      const after = await fetch(`http://localhost:3000/api/events?campaignId=${published.campaignId}`).then((r) => r.json());
+      const after = await readTotals(published.campaignId);
       after.total === before.total + 1
         ? ok(`the form produced an attributed conversion (${before.total} → ${after.total})`)
         : bad(`expected one new conversion, got ${after.total - before.total}`);
@@ -777,10 +810,10 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
         : bad('attribution lost on the second page view');
 
       // The untracked form must be left completely alone.
-      const beforeSearch = await fetch('http://localhost:3000/api/events').then((r) => r.json());
+      const beforeSearch = await page.evaluate(() => fetch('/api/events').then((r) => r.json()));
       await site.click('#search button[type="submit"]');
       await site.waitForTimeout(900);
-      const afterSearch = await fetch('http://localhost:3000/api/events').then((r) => r.json());
+      const afterSearch = await page.evaluate(() => fetch('/api/events').then((r) => r.json()));
       afterSearch.total === beforeSearch.total
         ? ok('an unmarked form sends nothing — no silent hoovering')
         : bad(`an unmarked form produced ${afterSearch.total - beforeSearch.total} conversion(s)`);

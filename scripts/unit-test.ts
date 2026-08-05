@@ -240,6 +240,13 @@ async function readPathChecks() {
       : ok('every channel value is a legal domain channel');
     console.log('\n== Write path: the server derives what the reducer derives ==');
     const { applyMutation } = await import('../src/lib/mutations');
+  // The write path is tenant-scoped now, so these need a principal rather
+  // than a bare organization id — which is the point: there is no way to call
+  // it without saying who is acting.
+  const actor = {
+    userId: 'u-dana', organizationId: fx.ORG.id, role: 'owner' as const,
+    email: 'dana@example.com', name: 'Dana Reyes', sessionId: 'test',
+  };
 
     // Approving is two rows, one user action. Forgetting the second leaves the
     // approvals queue showing work that is already done.
@@ -249,7 +256,7 @@ async function readPathChecks() {
         console.log('  SKIP no pending approval in the seed');
       } else {
         const before = await db.channelVariation.findUnique({ where: { id: pending.variationId } });
-        await applyMutation(fx.ORG.id, { type: 'setStatus', variationId: pending.variationId, status: 'approved' });
+        await applyMutation(actor, { type: 'setStatus', variationId: pending.variationId, status: 'approved' });
         const after = await db.approval.findUnique({ where: { id: pending.id } });
         eq(after?.decision, 'APPROVED', 'approving a post also decides its pending approval');
         after?.decidedAt ? ok('decision timestamped') : bad('approval decided with no decidedAt');
@@ -266,7 +273,7 @@ async function readPathChecks() {
       if (!v) {
         console.log('  SKIP no draft variation in the seed');
       } else {
-        await applyMutation(fx.ORG.id, {
+        await applyMutation(actor, {
           type: 'updateVariation',
           variationId: v.id,
           patch: { body: 'edited by the test', status: 'PUBLISHED', publishedAt: new Date().toISOString() },
@@ -354,9 +361,9 @@ async function readPathChecks() {
     {
       const d = await db.publishDestination.findFirst();
       if (d) {
-        await applyMutation(fx.ORG.id, { type: 'toggleDestination', destinationId: d.id });
+        await applyMutation(actor, { type: 'toggleDestination', destinationId: d.id });
         const mid = await db.publishDestination.findUnique({ where: { id: d.id } });
-        await applyMutation(fx.ORG.id, { type: 'toggleDestination', destinationId: d.id });
+        await applyMutation(actor, { type: 'toggleDestination', destinationId: d.id });
         const end = await db.publishDestination.findUnique({ where: { id: d.id } });
         mid?.enabled !== d.enabled && end?.enabled === d.enabled
           ? ok('toggling a destination twice returns it to its original state')

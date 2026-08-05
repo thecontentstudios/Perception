@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { hasEncryptionKey } from '@/lib/oauth/crypto';
 import { getAccessToken, removeGrant, saveGrant } from '@/lib/oauth/store';
 import { reconcileAccount, reconcileDisconnect } from '@/lib/oauth/reconcile';
+import { handle, require_ } from '@/lib/auth/guard';
 
 /**
  * Bluesky — a connection that genuinely works today, with no app registration,
@@ -26,6 +27,10 @@ interface SessionResponse {
 
 /** POST { handle, appPassword } → real session, stored encrypted. */
 export async function POST(request: Request) {
+  return handle(async () => {
+  // Connecting an account is an admin action: it grants this workspace the
+  // ability to post as the business.
+  const principal = await require_('manage_connections');
   let handle: string;
   let appPassword: string;
   try {
@@ -106,6 +111,8 @@ export async function POST(request: Request) {
     externalAccountId: session.did,
   });
   await reconcileAccount({
+    organizationId: principal.organizationId,
+    connectedById: principal.userId,
     channel: 'bluesky',
     accountLabel: `@${session.handle}`,
     externalAccountId: session.did,
@@ -120,13 +127,17 @@ export async function POST(request: Request) {
     // Deliberately no tokens in this response.
     destination: { name: `@${session.handle}`, kind: 'Handle', externalId: session.did },
   });
+  });
 }
 
 /** DELETE → forget the stored session. */
 export async function DELETE() {
+  return handle(async () => {
+  const principal = await require_('manage_connections');
   removeGrant('bluesky');
-  await reconcileDisconnect('bluesky');
+  await reconcileDisconnect(principal.organizationId, 'bluesky');
   return NextResponse.json({ disconnected: true });
+  });
 }
 
 /** GET → is there a live session, and whose? */

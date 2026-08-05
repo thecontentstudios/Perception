@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { db, dbAvailable } from '@/lib/db';
 import { linkFor } from '@/lib/tracking';
 import { appUrl } from '@/lib/oauth/providers';
+import { handle, require_ } from '@/lib/auth/guard';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,9 +15,11 @@ export const dynamic = 'force-dynamic';
  * adding up.
  */
 export async function POST(req: Request) {
+  return handle(async () => {
   if (!(await dbAvailable())) {
     return NextResponse.json({ ok: false, reason: 'no-database' }, { status: 503 });
   }
+  const principal = await require_('create_content');
 
   let variationId: string;
   try {
@@ -25,11 +28,14 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, reason: 'malformed JSON' }, { status: 400 });
   }
 
-  const v = await db.channelVariation.findUnique({
-    where: { id: variationId },
+  const v = await db.channelVariation.findFirst({
+    where: {
+      id: variationId,
+      contentItem: { campaign: { organizationId: principal.organizationId } },
+    },
     include: { contentItem: { select: { campaignId: true } } },
   });
-  if (!v) return NextResponse.json({ ok: false, reason: 'no such post' }, { status: 404 });
+  if (!v) return NextResponse.json({ ok: false, reason: 'That post could not be found.' }, { status: 404 });
 
   const campaign = await db.campaign.findUnique({
     where: { id: v.contentItem.campaignId },
@@ -46,20 +52,23 @@ export async function POST(req: Request) {
   );
 
   return NextResponse.json({ ok: true, code, url: `${appUrl()}/r/${code}`, targetUrl });
+  });
 }
 
 /** GET → click counts per link, for a campaign. */
 export async function GET(req: Request) {
+  return handle(async () => {
   if (!(await dbAvailable())) {
     return NextResponse.json({ ok: false, reason: 'no-database' }, { status: 503 });
   }
+  const principal = await require_('read');
   const campaignId = new URL(req.url).searchParams.get('campaignId');
   if (!campaignId) {
     return NextResponse.json({ ok: false, reason: 'campaignId required' }, { status: 400 });
   }
 
   const links = await db.trackedLink.findMany({
-    where: { campaignId },
+    where: { campaignId, campaign: { organizationId: principal.organizationId } },
     include: { clicks: { select: { repeat: true, visitorId: true } } },
   });
 
@@ -74,5 +83,6 @@ export async function GET(req: Request) {
       // how a campaign looks twice as effective as it was.
       visitors: new Set(l.clicks.map((c) => c.visitorId)).size,
     })),
+  });
   });
 }

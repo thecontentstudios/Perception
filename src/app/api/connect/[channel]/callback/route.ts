@@ -4,6 +4,8 @@ import { appUrl, providerFor } from '@/lib/oauth/providers';
 import { safeEqual } from '@/lib/oauth/crypto';
 import { saveGrant } from '@/lib/oauth/store';
 import { reconcileAccount } from '@/lib/oauth/reconcile';
+import { currentPrincipal } from '@/lib/auth/session';
+import { can } from '@/lib/auth/guard';
 import type { Channel } from '@/lib/types';
 
 /**
@@ -110,7 +112,16 @@ export async function GET(
       accountLabel: provider.label,
       externalAccountId: String(payload.user_id ?? payload.open_id ?? 'unknown'),
     });
+    // The session survives the round trip to the platform because the cookie
+    // is SameSite=lax, which still sends on top-level navigation — this is the
+    // flow that would break under 'strict'.
+    const principal = await currentPrincipal();
+    if (!principal || !can(principal.role, 'manage_connections')) {
+      return back('error', 'Sign in as an admin before connecting an account.');
+    }
     await reconcileAccount({
+      organizationId: principal.organizationId,
+      connectedById: principal.userId,
       channel: provider.channel,
       accountLabel: provider.label,
       externalAccountId: String(payload.user_id ?? payload.open_id ?? 'unknown'),

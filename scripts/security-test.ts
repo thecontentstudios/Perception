@@ -1,0 +1,291 @@
+/**
+ * Security checks.
+ *
+ *   npm run test:security      (needs the server running on :3000)
+ *
+ * These are the assertions that would have caught the state this codebase was
+ * in before: every route open, every query pinned to one hardcoded tenant.
+ * They are written as an attacker would probe — unauthenticated calls, another
+ * tenant's ids, forged headers — rather than as a description of the code,
+ * because a test that mirrors the implementation passes whatever the
+ * implementation does.
+ */
+import 'dotenv/config';
+import { db } from '../src/lib/db';
+import { hashPassword, verifyPassword, passwordProblem, needsRehash } from '../src/lib/auth/password';
+
+const BASE = process.env.BASE_URL || 'http://localhost:3000';
+let failures = 0;
+const ok = (m: string) => console.log('  PASS ' + m);
+const bad = (m: string) => { failures++; console.log('  FAIL ' + m); };
+
+async function reachable(): Promise<boolean> {
+  try { return (await fetch(`${BASE}/api/health`)).status < 600; } catch { return false; }
+}
+
+async function main() {
+  console.log('\n== Passwords ==');
+  {
+    const hash = await hashPassword('a-perfectly-fine-passphrase');
+    (await verifyPassword('a-perfectly-fine-passphrase', hash))
+      ? ok('correct password verifies') : bad('correct password rejected');
+    !(await verifyPassword('a-perfectly-fine-passphras', hash))
+      ? ok('a near-miss is rejected') : bad('near-miss accepted');
+    !hash.includes('a-perfectly-fine-passphrase')
+      ? ok('the hash does not contain the password') : bad('password stored in plaintext');
+
+    const second = await hashPassword('a-perfectly-fine-passphrase');
+    second !== hash ? ok('salted — same password, different hash') : bad('unsalted: identical hashes');
+
+    // A user with no password must not be loggable into with any input.
+    !(await verifyPassword('anything', null))
+      ? ok('an account with no password cannot be signed into') : bad('null hash accepted a password');
+
+    !needsRehash(hash) ? ok('a fresh hash does not need upgrading') : bad('fresh hash flagged for rehash');
+    needsRehash('scrypt$1024$8$1$c2FsdA==$aGFzaA==')
+      ? ok('a weaker old hash is flagged for upgrade on next login')
+      : bad('weak parameters not detected');
+
+    passwordProblem('short') ? ok('a short password is refused') : bad('short password allowed');
+    passwordProblem('password123') ? ok('a breach-list password is refused') : bad('common password allowed');
+    passwordProblem('aaaaaaaaaaaaaaaa') ? ok('a repetitive password is refused') : bad('repetitive password allowed');
+    !passwordProblem('correct horse battery staple')
+      ? ok('a good passphrase is accepted') : bad('good passphrase refused');
+  }
+
+  if (!(await reachable())) {
+    console.log(`\n  SKIP server not running at ${BASE} — start it to run the route checks\n`);
+    return;
+  }
+
+  console.log('\n== Every mutating route refuses an anonymous caller ==');
+  {
+    // No cookie jar: these go out exactly as a stranger's would.
+    const probes: [string, RequestInit][] = [
+      ['/api/mutate', { method: 'POST', body: JSON.stringify({ mutation: { type: 'setStatus', variationId: 'v-1', status: 'approved' } }) }],
+      ['/api/retry', { method: 'POST', body: JSON.stringify({ variationId: 'v-1' }) }],
+      ['/api/remediate', { method: 'POST', body: JSON.stringify({ kind: 'trim_caption', variationId: 'v-1', params: {} }) }],
+      ['/api/links', { method: 'POST', body: JSON.stringify({ variationId: 'v-1' }) }],
+      ['/api/media', { method: 'POST', body: new FormData() }],
+      ['/api/connect/bluesky', { method: 'POST', body: JSON.stringify({ handle: 'x', appPassword: 'y' }) }],
+      ['/api/connect/mastodon', { method: 'POST', body: JSON.stringify({ host: 'x', token: 'y' }) }],
+    ];
+    for (const [path, init] of probes) {
+      const res = await fetch(`${BASE}${path}`, {
+        ...init,
+        headers: init.body instanceof FormData ? {} : { 'content-type': 'application/json' },
+      });
+      res.status === 401 || res.status === 403
+        ? ok(`${path} → ${res.status}`)
+        : bad(`${path} → ${res.status}, expected 401/403 — this route is open`);
+    }
+  }
+
+  console.log('\n== Reading is gated too ==');
+  {
+    for (const path of ['/api/analytics', '/api/learning', '/api/events?campaignId=c-fall', '/api/links?campaignId=c-fall']) {
+      const res = await fetch(`${BASE}${path}`);
+      const body = await res.json().catch(() => ({}));
+      // Analytics degrades to fixtures rather than 401, which is a deliberate
+      // difference — but it must not return computed rows to a stranger.
+      const leaked = body.source === 'computed' || body.ok === true;
+      !leaked ? ok(`${path} returns nothing real (${res.status})`) : bad(`${path} served real data to an anonymous caller`);
+    }
+    const ws = await fetch(`${BASE}/api/workspace`).then((r) => r.json());
+    ws.source === 'fixtures'
+      ? ok('/api/workspace gives an anonymous caller the sample workspace, not a tenant’s')
+      : bad(`/api/workspace served ${ws.source} data to an anonymous caller`);
+  }
+
+  console.log('\n== Signed in, but scoped ==');
+  {
+    const user = await db.user.findFirst({ where: { passwordHash: { not: null } } });
+    if (!user) {
+      console.log('  SKIP no seeded user with a password — run npm run db:seed');
+    } else {
+      const login = await fetch(`${BASE}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: user.email, password: process.env.SEED_PASSWORD || 'demo-password-change-me' }),
+      });
+      const cookie = login.headers.get('set-cookie')?.split(';')[0] ?? '';
+      login.ok && cookie ? ok('sign-in works and sets a session cookie') : bad(`sign-in failed: ${login.status}`);
+
+      /^pcp_session=/.test(cookie) ? ok('cookie is the session cookie') : bad(`unexpected cookie: ${cookie.slice(0, 30)}`);
+      const raw = login.headers.get('set-cookie') ?? '';
+      /HttpOnly/i.test(raw) ? ok('session cookie is HttpOnly — script cannot read it') : bad('session cookie readable from JS');
+      /SameSite=Lax/i.test(raw) ? ok('SameSite=Lax') : bad(`SameSite not set: ${raw.slice(0, 80)}`);
+
+      const auth = { cookie, 'content-type': 'application/json' };
+
+      // The session must not carry the raw token into the database.
+      const stored = await db.session.findFirst({ orderBy: { createdAt: 'desc' } });
+      const token = cookie.split('=')[1] ?? '';
+      stored && stored.tokenHash !== token
+        ? ok('the database stores a hash, not the session token')
+        : bad('the raw session token is stored');
+
+      const me = await fetch(`${BASE}/api/auth/me`, { headers: { cookie } }).then((r) => r.json());
+      me.authenticated ? ok(`identified as ${me.role}`) : bad('session not recognised');
+
+      // A real id from another tenant. This is the bug class that survives
+      // authentication: valid session, someone else's row.
+      const other = await db.organization.create({
+        data: { id: 'org-security-test', name: 'Another Customer', ingestKey: 'pk_security_test' },
+      });
+      const otherBrand = await db.brand.create({
+        data: { organizationId: other.id, name: 'Theirs', industry: 'landscaping' },
+      });
+      const otherCampaign = await db.campaign.create({
+        data: {
+          organizationId: other.id, brandId: otherBrand.id, name: 'Not yours',
+          goal: 'quote_requests', startDate: new Date(), endDate: new Date(),
+          ctaLabel: 'x', ctaUrl: 'https://example.com', utmCode: 'other', createdById: user.id,
+        },
+      });
+      const otherItem = await db.contentItem.create({
+        data: { campaignId: otherCampaign.id, title: 'Theirs', kind: 'social', coreMessage: 'x' },
+      });
+      const otherVariation = await db.channelVariation.create({
+        data: { contentItemId: otherItem.id, channel: 'INSTAGRAM', format: 'post', body: 'Their post' },
+      });
+
+      const crossTenant: [string, object][] = [
+        ['/api/mutate', { mutation: { type: 'setScheduledAt', variationId: otherVariation.id, scheduledAt: '2027-01-01T09:00' } }],
+        ['/api/retry', { variationId: otherVariation.id }],
+        ['/api/remediate', { kind: 'trim_caption', variationId: otherVariation.id, params: { maxChars: 5 } }],
+        ['/api/links', { variationId: otherVariation.id }],
+      ];
+      for (const [path, body] of crossTenant) {
+        const res = await fetch(`${BASE}${path}`, { method: 'POST', headers: auth, body: JSON.stringify(body) });
+        res.status === 404 || res.status === 403
+          ? ok(`${path} refuses another tenant's id (${res.status})`)
+          : bad(`${path} accepted another tenant's id → ${res.status}`);
+      }
+
+      // And the row must be untouched.
+      const after = await db.channelVariation.findUnique({ where: { id: otherVariation.id } });
+      after?.body === 'Their post' && after?.scheduledAt === null
+        ? ok("the other tenant's row is unchanged")
+        : bad('another tenant’s row was modified');
+
+      // Reading must be scoped too.
+      const theirLinks = await fetch(`${BASE}/api/links?campaignId=${otherCampaign.id}`, { headers: { cookie } })
+        .then((r) => r.json());
+      (theirLinks.links ?? []).length === 0
+        ? ok('link stats for another tenant’s campaign come back empty')
+        : bad('read another tenant’s link stats');
+
+      // CSRF: a cross-origin POST with a valid cookie must be refused.
+      const csrf = await fetch(`${BASE}/api/mutate`, {
+        method: 'POST',
+        headers: { ...auth, origin: 'https://evil.example' },
+        body: JSON.stringify({ mutation: { type: 'setBrand', brandId: 'x' } }),
+      });
+      csrf.status === 403 ? ok('a cross-origin write is refused even with a valid cookie') : bad(`cross-origin write → ${csrf.status}`);
+
+      // Signing out has to actually end the session.
+      await fetch(`${BASE}/api/auth/logout`, { method: 'POST', headers: { cookie } });
+      const afterLogout = await fetch(`${BASE}/api/auth/me`, { headers: { cookie } }).then((r) => r.json());
+      !afterLogout.authenticated ? ok('the session is dead after sign-out') : bad('session still valid after sign-out');
+
+      await db.channelVariation.delete({ where: { id: otherVariation.id } });
+      await db.contentItem.delete({ where: { id: otherItem.id } });
+      await db.campaign.delete({ where: { id: otherCampaign.id } });
+      await db.brand.delete({ where: { id: otherBrand.id } });
+      await db.session.deleteMany({ where: { organizationId: other.id } });
+      await db.organization.delete({ where: { id: other.id } });
+    }
+  }
+
+  console.log('\n== Login does not leak which accounts exist ==');
+  {
+    const t0 = Date.now();
+    const unknown = await fetch(`${BASE}/api/auth/login`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: 'nobody@nowhere.example', password: 'whatever-it-is' }),
+    });
+    const unknownMs = Date.now() - t0;
+    const unknownBody = await unknown.json();
+
+    const user = await db.user.findFirst({ where: { passwordHash: { not: null } } });
+    const t1 = Date.now();
+    const wrong = await fetch(`${BASE}/api/auth/login`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: user?.email ?? 'a@b.c', password: 'definitely-not-the-password' }),
+    });
+    const wrongMs = Date.now() - t1;
+    const wrongBody = await wrong.json();
+
+    unknownBody.reason === wrongBody.reason && unknown.status === wrong.status
+      ? ok(`unknown email and wrong password are indistinguishable ("${wrongBody.reason}")`)
+      : bad(`different responses: "${unknownBody.reason}" vs "${wrongBody.reason}"`);
+
+    // Timing: the unknown-email path still runs a full hash, so the two should
+    // be within an order of magnitude. Loose on purpose — a tight bound would
+    // be flaky under load, and the property being checked is "not 2ms vs
+    // 100ms", not equality.
+    const ratio = Math.max(unknownMs, wrongMs) / Math.max(1, Math.min(unknownMs, wrongMs));
+    ratio < 5
+      ? ok(`and take comparable time (${unknownMs}ms vs ${wrongMs}ms)`)
+      : bad(`timing leaks account existence: ${unknownMs}ms vs ${wrongMs}ms`);
+  }
+
+  console.log('\n== Public endpoints: limited, and tenant-scoped ==');
+  {
+    // Conversions with no key and no attribution must be refused, or anyone
+    // can write into any workspace.
+    const orphan = await fetch(`${BASE}/api/events`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'quote_request', eventId: `sec-${Date.now()}` }),
+    });
+    orphan.status === 400
+      ? ok('an event with no site key and no attribution is refused')
+      : bad(`unkeyed event → ${orphan.status}`);
+
+    const badKey = await fetch(`${BASE}/api/events`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'quote_request', key: 'pk_not_a_real_key', eventId: `sec2-${Date.now()}` }),
+    });
+    badKey.status === 401 ? ok('an unknown site key is refused') : bad(`bad key → ${badKey.status}`);
+
+    // Rate limiting: enough requests in one window must start being refused.
+    let limited = false;
+    for (let i = 0; i < 140 && !limited; i++) {
+      const r = await fetch(`${BASE}/api/events`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: 'quote_request', key: 'pk_demo_greenscape_workspace', eventId: `rl-${i}` }),
+      });
+      if (r.status === 429) limited = true;
+    }
+    limited ? ok('the public ingest endpoint rate limits') : bad('no rate limit on /api/events');
+  }
+
+  console.log('\n== Headers and health ==');
+  {
+    const res = await fetch(`${BASE}/login`);
+    const h = (k: string) => res.headers.get(k) ?? '';
+    h('content-security-policy').includes("frame-ancestors 'none'")
+      ? ok('CSP forbids framing') : bad(`no frame-ancestors: ${h('content-security-policy').slice(0, 60)}`);
+    h('x-content-type-options') === 'nosniff' ? ok('nosniff set') : bad('no nosniff');
+    h('referrer-policy') ? ok(`referrer policy set (${h('referrer-policy')})`) : bad('no referrer policy');
+    !h('x-powered-by') ? ok('no x-powered-by') : bad('x-powered-by leaks the framework');
+
+    const media = await fetch(`${BASE}/api/media/file/aa/bb/${'0'.repeat(64)}.jpg`);
+    (media.headers.get('content-security-policy') ?? '').includes('sandbox')
+      ? ok('uploaded files are served sandboxed') : bad('uploaded files are not sandboxed');
+
+    const health = await fetch(`${BASE}/api/health?deep=1`).then((r) => r.json());
+    health.checks?.database ? ok(`health reports its dependencies (db ${health.checks.database.ok})`) : bad('health has no checks');
+    !JSON.stringify(health).includes('postgresql://')
+      ? ok('health leaks no connection strings') : bad('health echoed a connection string');
+  }
+}
+
+main()
+  .catch((e) => bad(`threw: ${(e as Error).stack}`))
+  .finally(async () => {
+    await db.$disconnect();
+    console.log(failures ? `\n${failures} FAILURE(S)` : '\nSECURITY CHECKS PASSED');
+    process.exit(failures ? 1 : 0);
+  });

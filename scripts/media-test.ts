@@ -266,17 +266,39 @@ async function main() {
       },
     });
 
-    // Apply the fix exactly as the button does.
-    const { POST } = await import('../src/app/api/remediate/route');
-    const res = await POST(new Request('http://localhost/api/remediate', {
+    // Apply the fix exactly as the button does — over HTTP, with a session.
+    //
+    // This used to import the route handler and call it as a function, which
+    // stopped working the moment routes needed a session: `cookies()` has no
+    // request to read outside a real one. Going over the wire is also simply a
+    // better test, because it exercises the auth and tenant checks too.
+    const BASE = process.env.BASE_URL || 'http://localhost:3000';
+    let out: { ok?: boolean; applied?: string; asset?: { id: string; durationSec: number }; reason?: string } = {};
+    const health = await fetch(`${BASE}/api/health`).then((r) => r.ok).catch(() => false);
+    if (!health) {
+      console.log('  SKIP server not running — start it to cover the route');
+      await cleanupE2E();
+      return;
+    }
+    const login = await fetch(`${BASE}/api/auth/login`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        email: 'dana@summitlocal.co',
+        password: process.env.SEED_PASSWORD || 'demo-password-change-me',
+      }),
+    });
+    const cookie = login.headers.get('set-cookie')?.split(';')[0] ?? '';
+    login.ok && cookie ? ok('signed in to apply the fix') : bad(`could not sign in: ${login.status}`);
+
+    const res = await fetch(`${BASE}/api/remediate`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', cookie },
       body: JSON.stringify({
         kind: 'trim_video', variationId: variation.id, assetId: asset.id,
         params: { maxSeconds: 3 },
       }),
-    }));
-    const out = await res.json();
+    });
+    out = await res.json();
     out.ok ? ok(`the fix applied through the route (${out.applied})`) : bad(`fix failed: ${out.reason}`);
     out.asset?.durationSec === 3
       ? ok(`the post's video is now ${out.asset.durationSec}s, down from ${src.durationSec}s`)
@@ -306,11 +328,15 @@ async function main() {
       : bad('no audit row for the media edit');
 
     // Clean up so the demo workspace is unchanged.
-    await db.variationMedia.deleteMany({ where: { variationId: variation.id } });
-    await db.auditEvent.deleteMany({ where: { target: variation.id } });
-    await db.channelVariation.delete({ where: { id: variation.id } });
-    await db.mediaAsset.deleteMany({ where: { id: { in: [asset.id, out.asset.id] } } });
-    await rm(vdir, { recursive: true, force: true });
+    async function cleanupE2E() {
+      await db.variationMedia.deleteMany({ where: { variationId: 'v-media-e2e' } });
+      await db.auditEvent.deleteMany({ where: { target: 'v-media-e2e' } });
+      await db.channelVariation.deleteMany({ where: { id: 'v-media-e2e' } });
+      const ids = [asset.id, out.asset?.id].filter((x): x is string => Boolean(x));
+      await db.mediaAsset.deleteMany({ where: { id: { in: ids } } });
+      await rm(vdir, { recursive: true, force: true });
+    }
+    await cleanupE2E();
   }
 
   await rm(dir, { recursive: true, force: true });

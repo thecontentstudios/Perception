@@ -3,6 +3,8 @@ import { db, dbAvailable } from '@/lib/db';
 import {
   ATTRIBUTION_COOKIE, ATTRIBUTION_MAX_AGE, VISITOR_COOKIE, newVisitorId, withUtms,
 } from '@/lib/tracking';
+import { rateLimit } from '@/lib/rate-limit';
+import { clientIp } from '@/lib/request';
 
 export const dynamic = 'force-dynamic';
 
@@ -39,6 +41,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
     return NextResponse.redirect(new URL('/', req.url), 302);
   }
 
+  // Generous — a genuinely popular post produces a lot of clicks from behind
+  // one corporate NAT — but bounded, so nobody inflates a campaign's numbers
+  // with a loop. Over the limit the visitor still gets redirected; only the
+  // recording is skipped, because a broken link is the worse failure.
+  const withinLimit = (await rateLimit(`click:${clientIp(req)}`, { max: 600, windowSec: 60 })).ok;
+
   const cookies = parseCookies(req.headers.get('cookie'));
   const returning = Boolean(cookies[VISITOR_COOKIE]);
   const visitorId = cookies[VISITOR_COOKIE] || newVisitorId();
@@ -48,6 +56,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
   // domain where our cookie will not be sent. See src/lib/attribution.ts.
   let clickId: string | null = null;
   try {
+    if (!withinLimit) throw new Error('rate limited');
     const repeat =
       returning && (await db.linkClick.count({ where: { linkId: link.id, visitorId } })) > 0;
     const click = await db.linkClick.create({

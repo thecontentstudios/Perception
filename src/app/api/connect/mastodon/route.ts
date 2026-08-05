@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { hasEncryptionKey } from '@/lib/oauth/crypto';
 import { removeGrant, saveGrant } from '@/lib/oauth/store';
 import { reconcileAccount, reconcileDisconnect } from '@/lib/oauth/reconcile';
+import { handle, require_ } from '@/lib/auth/guard';
 import { fetchInstanceLimits, mastodonPublisher } from '@/lib/publishers/mastodon';
 
 /**
@@ -23,6 +24,10 @@ function normalizeHost(input: string): string {
 }
 
 export async function POST(request: Request) {
+  return handle(async () => {
+  // Connecting an account is an admin action: it grants this workspace the
+  // ability to post as the business.
+  const principal = await require_('manage_connections');
   let host: string;
   let token: string;
   try {
@@ -109,6 +114,8 @@ export async function POST(request: Request) {
   // The grant is only half of "connected" — the workspace row is what every
   // screen and preflight reads.
   await reconcileAccount({
+    organizationId: principal.organizationId,
+    connectedById: principal.userId,
     channel: 'mastodon',
     accountLabel: `@${account}@${host}`,
     externalAccountId: `${host}|${account}|${limit}`,
@@ -126,6 +133,7 @@ export async function POST(request: Request) {
         ? `This instance allows ${limit} characters, not the usual 500 — we read it from the server.`
         : undefined,
   });
+  });
 }
 
 export async function GET() {
@@ -134,7 +142,10 @@ export async function GET() {
 }
 
 export async function DELETE() {
+  return handle(async () => {
+  const principal = await require_('manage_connections');
   removeGrant('mastodon');
-  await reconcileDisconnect('mastodon');
+  await reconcileDisconnect(principal.organizationId, 'mastodon');
   return NextResponse.json({ disconnected: true });
+  });
 }

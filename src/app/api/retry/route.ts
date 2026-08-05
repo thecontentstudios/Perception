@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 import { db, dbAvailable } from '@/lib/db';
 import { publishQueue } from '@/lib/queue';
 import { slotKey } from '@/lib/queue/scheduler';
-import { ORG } from '@/lib/demo-data';
+import { handle, require_ } from '@/lib/auth/guard';
+import { sameOrigin } from '@/lib/request';
 
 export const dynamic = 'force-dynamic';
 
@@ -21,9 +22,15 @@ export const dynamic = 'force-dynamic';
  * idempotency returns the original post instead.
  */
 export async function POST(req: Request) {
+  return handle(async () => {
   if (!(await dbAvailable())) {
     return NextResponse.json({ ok: false, reason: 'no-database' }, { status: 503 });
   }
+  if (!sameOrigin(req)) {
+    return NextResponse.json({ ok: false, reason: 'cross-origin request refused' }, { status: 403 });
+  }
+  // Retrying is publishing: it puts something on a public timeline.
+  const principal = await require_('publish');
 
   let variationId: string;
   try {
@@ -32,11 +39,11 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, reason: 'malformed JSON' }, { status: 400 });
   }
 
-  const v = await db.channelVariation.findUnique({
-    where: { id: variationId },
+  const v = await db.channelVariation.findFirst({
+    where: { id: variationId, contentItem: { campaign: { organizationId: principal.organizationId } } },
     select: { id: true, status: true, scheduledAt: true },
   });
-  if (!v) return NextResponse.json({ ok: false, reason: 'no such post' }, { status: 404 });
+  if (!v) return NextResponse.json({ ok: false, reason: 'That post could not be found.' }, { status: 404 });
   if (v.status === 'PUBLISHED') {
     return NextResponse.json({ ok: false, reason: 'already published' }, { status: 409 });
   }
@@ -66,10 +73,11 @@ export async function POST(req: Request) {
 
   await db.auditEvent.create({
     data: {
-      organizationId: ORG.id, actorUserId: 'u-dana', action: 'publish.retried',
-      target: variationId, detail: 'Manual retry from Home.',
+      organizationId: principal.organizationId, actorUserId: principal.userId,
+      action: 'publish.retried', target: variationId, detail: `Manual retry by ${principal.name}.`,
     },
   });
 
   return NextResponse.json({ ok: true, queued: true });
+  });
 }

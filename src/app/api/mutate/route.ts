@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
-import { applyMutation, DURABLE, type Mutation } from '@/lib/mutations';
+import { applyMutation, DURABLE, NotFound, type Mutation } from '@/lib/mutations';
 import { dbAvailable } from '@/lib/db';
-import { ORG } from '@/lib/demo-data';
+import { handle, require_ } from '@/lib/auth/guard';
+import { sameOrigin } from '@/lib/request';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,9 +20,19 @@ export const dynamic = 'force-dynamic';
  * the screen looks right and the work is gone on reload.
  */
 export async function POST(req: Request) {
+  return handle(async () => {
   if (!(await dbAvailable())) {
     return NextResponse.json({ ok: false, reason: 'no-database' }, { status: 503 });
   }
+
+  // Cookie-authenticated and state-changing, so it needs an origin check: a
+  // page on another site can make the browser send this request with the
+  // session cookie attached.
+  if (!sameOrigin(req)) {
+    return NextResponse.json({ ok: false, reason: 'cross-origin request refused' }, { status: 403 });
+  }
+
+  const principal = await require_('create_content');
 
   let body: { mutation?: Mutation };
   try {
@@ -38,10 +49,31 @@ export async function POST(req: Request) {
     );
   }
 
+  // Approving is a separate permission from writing. A creator drafting a
+  // post must not be able to approve their own work by calling the API
+  // directly — that is the whole point of the approval step.
+  if ((m.type === 'setStatus' && m.status === 'approved') ||
+      (m.type === 'bulkSetStatus' && m.status === 'approved')) {
+    await require_('approve');
+  }
+  if (m.type === 'connectAccount' || m.type === 'reconnect' ||
+      m.type === 'discoverDestinations' || m.type === 'mapDestination' ||
+      m.type === 'toggleDestination') {
+    await require_('manage_connections');
+  }
+
   try {
-    await applyMutation(ORG.id, m);
+    await applyMutation(principal, m);
     return NextResponse.json({ ok: true });
   } catch (e) {
-    return NextResponse.json({ ok: false, reason: (e as Error).message }, { status: 500 });
+    // "Not yours" and "broke" are different answers. A 500 for an id belonging
+    // to another tenant is both worse to read and slightly leaky — it says the
+    // request got further than a clean refusal would have.
+    if (e instanceof NotFound) {
+      return NextResponse.json({ ok: false, reason: e.message }, { status: 404 });
+    }
+    console.error('[mutate] failed', e);
+    return NextResponse.json({ ok: false, reason: 'That change could not be saved.' }, { status: 500 });
   }
+  });
 }

@@ -1,5 +1,6 @@
 import { db } from './db';
 import type { Channel, Conversation, VariationStatus } from './types';
+import type { Principal } from './auth/session';
 
 /**
  * The write path: durable actions → Prisma writes.
@@ -14,7 +15,61 @@ import type { Channel, Conversation, VariationStatus } from './types';
  * Approval row — the server has to derive it the same way, or the optimistic
  * UI and the durable truth drift apart in a way nobody notices until they
  * reload and lose work.
+ *
+ * **Every write is scoped to the caller's organization.** Authentication only
+ * answers "who are you"; it does not stop a signed-in customer from passing
+ * somebody else's variation id. Each `own*` helper below re-reads the row
+ * through its organization, so an id belonging to another tenant resolves to
+ * nothing and the mutation fails as "not found" — which is also the right
+ * thing to say, since confirming the id exists is itself a disclosure.
  */
+
+export class NotFound extends Error {
+  constructor(what: string) {
+    super(`${what} could not be found.`);
+  }
+}
+
+/** A variation, but only if it belongs to this organization. */
+async function ownVariation(org: string, id: string) {
+  const v = await db.channelVariation.findFirst({
+    where: { id, contentItem: { campaign: { organizationId: org } } },
+    select: { id: true, scheduledAt: true, status: true, body: true, hashtags: true },
+  });
+  if (!v) throw new NotFound('That post');
+  return v;
+}
+
+async function ownVariationIds(org: string, ids: string[]): Promise<string[]> {
+  const rows = await db.channelVariation.findMany({
+    where: { id: { in: ids }, contentItem: { campaign: { organizationId: org } } },
+    select: { id: true },
+  });
+  return rows.map((r) => r.id);
+}
+
+async function ownDestination(org: string, id: string) {
+  const d = await db.publishDestination.findFirst({
+    where: { id, account: { organizationId: org } },
+    select: { id: true, enabled: true },
+  });
+  if (!d) throw new NotFound('That destination');
+  return d;
+}
+
+async function ownAccount(org: string, id: string) {
+  const a = await db.connectedAccount.findFirst({ where: { id, organizationId: org }, select: { id: true } });
+  if (!a) throw new NotFound('That connection');
+  return a;
+}
+
+/** A brand id supplied by the client has to be one of ours, or null. */
+async function ownBrandId(org: string, brandId: string | null): Promise<string | null> {
+  if (!brandId) return null;
+  const b = await db.brand.findFirst({ where: { id: brandId, organizationId: org }, select: { id: true } });
+  if (!b) throw new NotFound('That business');
+  return b.id;
+}
 
 /** 'YYYY-MM-DDTHH:mm' → Date, read as UTC exactly like the seed writes it. */
 const at = (s: string): Date => new Date(s.length > 10 ? `${s}:00Z` : `${s}T00:00:00Z`);
@@ -70,21 +125,18 @@ const PATCHABLE = new Set([
   'body', 'subject', 'preheader', 'hashtags', 'hasUnsubscribeFooter', 'format', 'assigneeUserId',
 ]);
 
-const auditRow = (organizationId: string, action: string, target: string, detail: string) =>
+const auditRow = (p: Principal, action: string, target: string, detail: string) =>
   db.auditEvent.create({
-    data: { organizationId, actorUserId: 'u-dana', action, target, detail },
+    data: { organizationId: p.organizationId, actorUserId: p.userId, action, target, detail },
   });
 
-export async function applyMutation(organizationId: string, m: Mutation): Promise<void> {
+export async function applyMutation(p: Principal, m: Mutation): Promise<void> {
+  const org = p.organizationId;
   switch (m.type) {
     case 'reschedule': {
       // The reducer keeps the existing time of day and only moves the date;
       // re-reading the row is how the server learns what that time was.
-      const v = await db.channelVariation.findUnique({
-        where: { id: m.variationId },
-        select: { scheduledAt: true, status: true },
-      });
-      if (!v) throw new Error(`no variation ${m.variationId}`);
+      const v = await ownVariation(org, m.variationId);
       const time = v.scheduledAt ? v.scheduledAt.toISOString().slice(11, 16) : '12:00';
       await db.channelVariation.update({
         where: { id: m.variationId },
@@ -98,6 +150,7 @@ export async function applyMutation(organizationId: string, m: Mutation): Promis
     }
 
     case 'setScheduledAt':
+      await ownVariation(org, m.variationId);
       await db.channelVariation.update({
         where: { id: m.variationId },
         data: { scheduledAt: m.scheduledAt ? at(m.scheduledAt) : null },
@@ -105,6 +158,7 @@ export async function applyMutation(organizationId: string, m: Mutation): Promis
       return;
 
     case 'setStatus':
+      await ownVariation(org, m.variationId);
       await db.channelVariation.update({
         where: { id: m.variationId },
         data: { status: upper(m.status) },
@@ -115,19 +169,26 @@ export async function applyMutation(organizationId: string, m: Mutation): Promis
       if (m.status === 'approved') {
         await db.approval.updateMany({
           where: { variationId: m.variationId, decision: 'PENDING' },
-          data: { decision: 'APPROVED', decidedAt: new Date() },
+          // Who signed it off, recorded on the row rather than inferred later.
+          data: { decision: 'APPROVED', decidedAt: new Date(), approverId: p.userId },
         });
       }
       return;
 
-    case 'bulkSetStatus':
+    case 'bulkSetStatus': {
+      // Filter rather than reject: a bulk action over a stale selection should
+      // do the part it legitimately can, not fail wholesale.
+      const ids = await ownVariationIds(org, m.variationIds);
+      if (ids.length === 0) throw new NotFound('Those posts');
       await db.channelVariation.updateMany({
-        where: { id: { in: m.variationIds } },
+        where: { id: { in: ids } },
         data: { status: upper(m.status) },
       });
       return;
+    }
 
     case 'updateVariation': {
+      await ownVariation(org, m.variationId);
       const data: Record<string, unknown> = { overridden: true };
       for (const [k, val] of Object.entries(m.patch)) {
         if (!PATCHABLE.has(k)) continue;
@@ -138,22 +199,28 @@ export async function applyMutation(organizationId: string, m: Mutation): Promis
       return;
     }
 
-    case 'setAltText':
-      await db.mediaAsset.update({ where: { id: m.mediaId }, data: { altText: m.altText } });
+    case 'setAltText': {
+      const { count } = await db.mediaAsset.updateMany({
+        where: { id: m.mediaId, organizationId: org },
+        data: { altText: m.altText },
+      });
+      if (count === 0) throw new NotFound('That image');
       return;
+    }
 
-    case 'conversationStatus':
-      await db.conversation.update({ where: { id: m.conversationId }, data: { status: m.status } });
+    case 'conversationStatus': {
+      const { count } = await db.conversation.updateMany({
+        where: { id: m.conversationId, organizationId: org },
+        data: { status: m.status },
+      });
+      if (count === 0) throw new NotFound('That message');
       return;
+    }
 
     case 'toggleDestination': {
       // Read-then-write rather than a raw `NOT enabled`, because the client
       // sent an intent to flip, not a target value.
-      const d = await db.publishDestination.findUnique({
-        where: { id: m.destinationId },
-        select: { enabled: true },
-      });
-      if (!d) throw new Error(`no destination ${m.destinationId}`);
+      const d = await ownDestination(org, m.destinationId);
       await db.publishDestination.update({
         where: { id: m.destinationId },
         data: { enabled: !d.enabled },
@@ -162,21 +229,26 @@ export async function applyMutation(organizationId: string, m: Mutation): Promis
     }
 
     case 'mapDestination':
+      await ownDestination(org, m.destinationId);
       await db.publishDestination.update({
         where: { id: m.destinationId },
-        data: { brandId: m.brandId },
+        // The brand has to be ours too — otherwise a destination could be
+        // mapped into another tenant's business.
+        data: { brandId: await ownBrandId(org, m.brandId) },
       });
       return;
 
     case 'reconnect':
+      await ownAccount(org, m.accountId);
       await db.connectedAccount.update({
         where: { id: m.accountId },
         data: { status: 'CONNECTED', expiresAt: new Date('2026-12-06T00:00:00Z'), lastSyncAt: new Date() },
       });
-      await auditRow(organizationId, 'connection.restored', m.accountId, 'Reconnected by Dana Reyes.');
+      await auditRow(p, 'connection.restored', m.accountId, `Reconnected by ${p.name}.`);
       return;
 
     case 'connectAccount':
+      await ownAccount(org, m.accountId);
       await db.connectedAccount.update({
         where: { id: m.accountId },
         data: { status: 'CONNECTED', expiresAt: new Date('2027-02-01T00:00:00Z'), lastSyncAt: new Date() },
@@ -193,13 +265,14 @@ export async function applyMutation(organizationId: string, m: Mutation): Promis
           data: { enabled: true },
         });
       }
-      await auditRow(organizationId, 'connection.created', m.accountId,
+      await auditRow(p, 'connection.created', m.accountId,
         `${m.destinationIds.length} destination${m.destinationIds.length === 1 ? '' : 's'} enabled.`);
       return;
 
     case 'discoverDestinations': {
       // Authorizing twice must not duplicate the list — same guard the reducer
       // uses, enforced here because the client can always be raced.
+      await ownAccount(org, m.accountId);
       const existing = await db.publishDestination.count({ where: { accountId: m.accountId } });
       if (existing > 0) return;
       await db.publishDestination.createMany({
@@ -214,11 +287,12 @@ export async function applyMutation(organizationId: string, m: Mutation): Promis
     }
 
     case 'duplicateVariation': {
+      await ownVariation(org, m.sourceId);
       const src = await db.channelVariation.findUnique({
         where: { id: m.sourceId },
         include: { media: { orderBy: { position: 'asc' } } },
       });
-      if (!src) throw new Error(`no variation ${m.sourceId}`);
+      if (!src) throw new NotFound('That post');
       const { id, createdAt, updatedAt, media, ...rest } = src as typeof src & {
         createdAt?: Date; updatedAt?: Date;
       };

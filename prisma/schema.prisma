@@ -26,6 +26,11 @@ model Organization {
   id        String   @id @default(cuid())
   name      String
   plan      String   @default("starter")
+  /// Public, embedded in the tracking snippet on the customer's own website.
+  /// It identifies *which tenant* a conversion belongs to; it authorizes
+  /// nothing else and is safe to read in page source — which is the only
+  /// honest way to treat a value that ships to every visitor.
+  ingestKey String   @unique
   createdAt DateTime @default(now())
 
   brands      Brand[]
@@ -37,6 +42,7 @@ model Organization {
   segments    AudienceSegment[]
   auditEvents AuditEvent[]
   conversions Conversion[]
+  sessions    Session[]
 }
 
 model Brand {
@@ -74,12 +80,44 @@ model User {
   id               String   @id @default(cuid())
   email            String   @unique
   name             String
+  /// scrypt, as `scrypt$N$r$p$salt$hash`. Null for an invited user who has
+  /// not set one yet — they can exist and be assigned work before they log in.
+  passwordHash     String?
   twoFactorEnabled Boolean  @default(false)
   createdAt        DateTime @default(now())
 
   memberships Membership[]
+  sessions    Session[]
   approvalsRequested Approval[] @relation("requestedBy")
   approvalsToDecide  Approval[] @relation("approver")
+}
+
+/// Server-side sessions, deliberately not JWTs.
+///
+/// A JWT cannot be revoked before it expires, which makes "log out everywhere"
+/// and "we think that laptop was stolen" impossible to honour. A row is one
+/// DELETE. The cost is a lookup per request, which at this scale is nothing.
+model Session {
+  id        String   @id @default(cuid())
+  /// SHA-256 of the cookie value. The raw token is never stored, so a database
+  /// dump does not hand over live sessions.
+  tokenHash String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// The tenant this session is acting in. A user in several organizations
+  /// gets one session per organization rather than an ambient "current org",
+  /// so a request can never be ambiguous about whose data it is touching.
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+  /// Coarse, for the "recent sign-ins" list. Never used for authorization.
+  userAgent String?
+  ip        String?
+
+  @@index([userId])
+  @@index([expiresAt])
 }
 
 enum Role {

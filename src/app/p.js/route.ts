@@ -24,13 +24,18 @@ export const dynamic = 'force-dynamic';
  *   - **It stores nothing on our domain.** Attribution lives in the visitor's
  *     own localStorage, first-party to the customer's site.
  */
-export async function GET() {
+export async function GET(req: Request) {
   const endpoint = `${appUrl()}/api/events`;
+  // The snippet is served per-tenant: ?key=pk_... gets baked in so the
+  // customer pastes one tag and nothing else. Public by design — it names a
+  // workspace and authorizes nothing.
+  const key = new URL(req.url).searchParams.get('key') ?? '';
 
   const js = `/* Perception — conversion tracking. One tag, no dependencies. */
 (function () {
   'use strict';
   var ENDPOINT = ${JSON.stringify(endpoint)};
+  var SITE_KEY = ${JSON.stringify(key)};
   var STORE = 'perception.attribution';
   // Matches the server's attribution window; a click older than this is not
   // credited, here or there.
@@ -66,6 +71,7 @@ export async function GET() {
     var a = read() || {};
     var body = {
       kind: kind,
+      key: SITE_KEY || undefined,
       clickId: a.click || undefined,
       utmContent: a.content || undefined,
       utmCampaign: a.campaign || undefined,

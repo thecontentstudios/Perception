@@ -9,6 +9,7 @@
  *   npm run db:seed
  */
 import { PrismaClient, type Channel as PChannel } from '@prisma/client';
+import { hashPassword } from '../src/lib/auth/password';
 import {
   ACCOUNTS, APPROVALS, AUDIT, BRANDS, CAMPAIGNS, CONTACTS, CONTENT_ITEMS,
   CONVERSATIONS, DESTINATIONS, MEDIA, ORG, SEGMENTS, USERS, VARIATIONS,
@@ -34,12 +35,20 @@ async function main() {
   `);
 
   await db.organization.create({
-    data: { id: ORG.id, name: ORG.name, plan: ORG.plan },
+    // Fixed for the demo so the snippet in the docs keeps working across
+    // reseeds. A real organization gets a random one at signup.
+    data: { id: ORG.id, name: ORG.name, plan: ORG.plan, ingestKey: 'pk_demo_greenscape_workspace' },
   });
 
+  // One shared password for the demo accounts, and a loud one: nobody should
+  // be able to deploy this seed and think it was safe. Override with
+  // SEED_PASSWORD when standing up a shared demo environment.
+  const seedPassword = process.env.SEED_PASSWORD || 'demo-password-change-me';
+  const passwordHash = await hashPassword(seedPassword);
   await db.user.createMany({
     data: USERS.map((u) => ({
       id: u.id, email: u.email, name: u.name, twoFactorEnabled: u.twoFactorEnabled,
+      passwordHash,
     })),
   });
 
@@ -222,6 +231,10 @@ async function main() {
     conversions: await db.conversion.count(),
   };
   console.log('Seeded:', counts);
+  console.log(
+    `\nSign in as ${USERS[0].email} with the password "${seedPassword}".` +
+    (process.env.SEED_PASSWORD ? '' : '\nThat is a well-known default — set SEED_PASSWORD before exposing this to anyone.')
+  );
 }
 
 /**

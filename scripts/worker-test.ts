@@ -28,6 +28,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const MOCK_PORT = Number(process.env.MOCK_PORT || 4321);
 const HOST = `localhost:${MOCK_PORT}`;
 const TEST_ID = 'v-worker-test';
+const ORG_ID = 'org-1';
 
 async function reachable(url: string): Promise<boolean> {
   try {
@@ -67,6 +68,7 @@ async function main() {
   // The workspace row is the other half of "connected", and it is what
   // preflight reads at fire time — connecting through the UI writes both.
   await reconcileAccount({
+    organizationId: ORG_ID,
     channel: 'mastodon',
     accountLabel: '@greenscape',
     externalAccountId: `${HOST}|1|500`,
@@ -194,6 +196,7 @@ async function main() {
     externalAccountId: `${HOST}|1|500`,
   });
   await reconcileAccount({
+    organizationId: ORG_ID,
     channel: 'mastodon', accountLabel: '@greenscape',
     externalAccountId: `${HOST}|1|500`, scopes: ['write:statuses'], expiresAt: null,
   });
@@ -256,7 +259,7 @@ async function cleanup() {
   await db.auditEvent.deleteMany({ where: { target: TEST_ID } });
   await db.channelVariation.deleteMany({ where: { id: TEST_ID } });
   removeGrant('mastodon');
-  await reconcileDisconnect('mastodon');
+  await reconcileDisconnect(ORG_ID, 'mastodon');
   await publishQueue().obliterate({ force: true }).catch(() => {});
 }
 

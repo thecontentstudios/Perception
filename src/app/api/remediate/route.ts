@@ -4,7 +4,8 @@ import { cropImage, cropVideo, trimVideo } from '@/lib/media/renditions';
 import { trimToWords, type RemedyKind } from '@/lib/remediate';
 import { ffmpegAvailable } from '@/lib/media/video';
 import { storage } from '@/lib/storage';
-import { ORG } from '@/lib/demo-data';
+import { handle, require_ } from '@/lib/auth/guard';
+import { sameOrigin } from '@/lib/request';
 import type { AspectRatio } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -30,9 +31,14 @@ interface Body {
 }
 
 export async function POST(req: Request) {
+  return handle(async () => {
   if (!(await dbAvailable())) {
     return NextResponse.json({ ok: false, reason: 'no-database' }, { status: 503 });
   }
+  if (!sameOrigin(req)) {
+    return NextResponse.json({ ok: false, reason: 'cross-origin request refused' }, { status: 403 });
+  }
+  const principal = await require_('create_content');
 
   let body: Body;
   try {
@@ -41,11 +47,16 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, reason: 'malformed JSON' }, { status: 400 });
   }
 
-  const variation = await db.channelVariation.findUnique({
-    where: { id: body.variationId },
+  // Scoped: a fix is a write, and an id from another tenant must resolve to
+  // nothing rather than to their post.
+  const variation = await db.channelVariation.findFirst({
+    where: {
+      id: body.variationId,
+      contentItem: { campaign: { organizationId: principal.organizationId } },
+    },
     include: { media: { include: { asset: true }, orderBy: { position: 'asc' } } },
   });
-  if (!variation) return NextResponse.json({ ok: false, reason: 'no such post' }, { status: 404 });
+  if (!variation) return NextResponse.json({ ok: false, reason: 'That post could not be found.' }, { status: 404 });
 
   try {
     switch (body.kind) {
@@ -113,7 +124,7 @@ export async function POST(req: Request) {
         // its bytes.
         const derived = await db.mediaAsset.create({
           data: {
-            organizationId: ORG.id,
+            organizationId: principal.organizationId,
             brandId: asset.brandId,
             kind: asset.kind,
             storageKey: rendition.key,
@@ -129,7 +140,7 @@ export async function POST(req: Request) {
             // Alt text carries over: the picture still shows the same thing.
             altText: asset.altText,
             tags: [...asset.tags, 'rendition'],
-            uploadedById: 'u-dana',
+            uploadedById: principal.userId,
           },
         });
 
@@ -142,7 +153,8 @@ export async function POST(req: Request) {
 
         await db.auditEvent.create({
           data: {
-            organizationId: ORG.id, actorUserId: 'u-dana', action: `media.${body.kind}`,
+            organizationId: principal.organizationId, actorUserId: principal.userId,
+            action: `media.${body.kind}`,
             target: variation.id,
             detail: `${asset.fileName} → ${derived.fileName}; original kept.`,
           },
@@ -164,6 +176,8 @@ export async function POST(req: Request) {
         return NextResponse.json({ ok: false, reason: `unknown fix: ${body.kind}` }, { status: 400 });
     }
   } catch (e) {
-    return NextResponse.json({ ok: false, reason: (e as Error).message }, { status: 500 });
+    console.error('[remediate] failed', e);
+    return NextResponse.json({ ok: false, reason: 'That fix could not be applied.' }, { status: 500 });
   }
+  });
 }

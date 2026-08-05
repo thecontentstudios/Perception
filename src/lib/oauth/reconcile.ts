@@ -1,5 +1,5 @@
 import { db, dbAvailable } from '../db';
-import { ORG } from '../demo-data';
+
 import type { Channel } from '../types';
 
 /**
@@ -17,6 +17,8 @@ import type { Channel } from '../types';
  * every connect path.
  */
 export async function reconcileAccount(input: {
+  organizationId: string;
+  connectedById?: string | null;
   channel: Channel;
   accountLabel: string;
   externalAccountId: string;
@@ -35,7 +37,7 @@ export async function reconcileAccount(input: {
 
   try {
     const existing = await db.connectedAccount.findFirst({
-      where: { organizationId: ORG.id, channel: input.channel.toUpperCase() as never },
+      where: { organizationId: input.organizationId, channel: input.channel.toUpperCase() as never },
     });
     if (existing) {
       await db.connectedAccount.update({ where: { id: existing.id }, data });
@@ -44,10 +46,10 @@ export async function reconcileAccount(input: {
     await db.connectedAccount.create({
       data: {
         ...data,
-        organizationId: ORG.id,
+        organizationId: input.organizationId,
         channel: input.channel.toUpperCase() as never,
         destinationKind: 'Account',
-        connectedById: 'u-dana',
+        connectedById: input.connectedById ?? null,
       },
     });
   } catch {
@@ -58,11 +60,11 @@ export async function reconcileAccount(input: {
 }
 
 /** The mirror image: disconnecting has to update both halves too. */
-export async function reconcileDisconnect(channel: Channel): Promise<void> {
+export async function reconcileDisconnect(organizationId: string, channel: Channel): Promise<void> {
   if (!(await dbAvailable())) return;
   try {
     await db.connectedAccount.updateMany({
-      where: { organizationId: ORG.id, channel: channel.toUpperCase() as never },
+      where: { organizationId, channel: channel.toUpperCase() as never },
       data: { status: 'NOT_CONNECTED', lastSyncAt: new Date() },
     });
   } catch {

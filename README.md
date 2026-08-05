@@ -109,10 +109,21 @@ echo 'REDIS_URL="redis://127.0.0.1:6379"' >> .env
 #     sharp ships its own binaries.
 sudo apt-get install -y ffmpeg      # or: brew install ffmpeg
 
-# 3. Two processes
+# 3. Required before anything can connect a social account
+echo "TOKEN_ENCRYPTION_KEY=\"$(openssl rand -base64 32)\"" >> .env
+echo 'APP_URL="http://localhost:3000"' >> .env
+
+# 4. Two processes
 npm run dev             # the app
 npm run worker          # scheduled posts, in its own terminal
 ```
+
+Sign in with the account the seed prints — `dana@summitlocal.co` and
+`demo-password-change-me` unless you set `SEED_PASSWORD`. **That default is
+well-known**; set your own before anyone else can reach the app.
+
+Read [`docs/PRODUCTION.md`](docs/PRODUCTION.md) before deploying. It covers what
+is protected, what isn't, and the configuration that decides which.
 
 The top-bar pill turns green and reads **Database** once rows are loading from
 Postgres. With the worker running, a post scheduled two minutes out publishes
@@ -153,11 +164,12 @@ repeatedly without cleanup.
 | `npm run db:seed` | Load the demo workspace into Postgres |
 | `npm run test:unit` | Facet byte offsets, grapheme counting, token crypto, PKCE, read/write path |
 | `npm run test:media` | Upload, EXIF stripping, crops, video trimming (needs sharp + ffmpeg) |
+| `npm run test:security` | Auth, tenant isolation, rate limits, headers (needs the server running) |
 | `npm run test:worker` | Schedules a post, runs the worker, checks it published (needs `node scripts/mock-mastodon.js`) |
 | `node scripts/mock-mastodon.js` | Stand-in Mastodon instance for the worker suite |
 | `node scripts/mock-site.js` | Stand-in customer website, for testing the tracking snippet |
 | `npm run test:ui` | Browser suite: nav, panels, drag-drop, discovery, fan-out, live connections (needs the server running) |
-| `npm test` | All four suites |
+| `npm test` | All five suites |
 
 Every suite that needs infrastructure **skips with a note rather than failing**
 when it isn't there, so `npm test` stays green on a fresh clone.

@@ -2,7 +2,7 @@ import { db } from '../db';
 import { loadWorkspace } from '../queries';
 import { preflight, type PreflightContext } from '../preflight';
 import { publisherFor } from '../publishers/registry';
-import { ORG } from '../demo-data';
+
 import type { PublishJobData } from './index';
 
 /**
@@ -43,6 +43,16 @@ function isRetryable(error: string, needsReconnect?: boolean): boolean {
 
 export async function runPublishJob(data: PublishJobData): Promise<JobResult> {
   const { variationId, idempotencyKey } = data;
+
+  // The worker has no session — it acts on behalf of the system. So the
+  // organization comes from the row it is about to publish, which is the only
+  // correct source once more than one tenant exists.
+  const owner = await db.channelVariation.findUnique({
+    where: { id: variationId },
+    select: { contentItem: { select: { campaign: { select: { organizationId: true } } } } },
+  });
+  if (!owner) return { status: 'skipped', detail: 'variation missing' };
+  const organizationId = owner.contentItem.campaign.organizationId;
 
   // 1 — Claim. `updateMany` with the expected state in the WHERE clause is a
   // compare-and-swap: whichever worker gets count 1 owns the job, the other
@@ -101,7 +111,7 @@ export async function runPublishJob(data: PublishJobData): Promise<JobResult> {
     // expire, media can be deleted, a campaign can end. Publishing on a stale
     // approval is how a product posts something the owner would not have
     // approved today.
-    const w = await loadWorkspace(ORG.id);
+    const w = await loadWorkspace(organizationId);
     const v = w.variations.find((x) => x.id === variationId);
     if (!v) return finish({ status: 'failed', detail: 'variation vanished mid-flight' });
 
@@ -131,7 +141,7 @@ export async function runPublishJob(data: PublishJobData): Promise<JobResult> {
       });
       await db.auditEvent.create({
         data: {
-          organizationId: ORG.id, actorUserId: 'system', action: 'publish.blocked',
+          organizationId, actorUserId: null, action: 'publish.blocked',
           target: variationId, detail: blockers.map((b) => b.message).join('; '),
         },
       });
@@ -169,7 +179,7 @@ export async function runPublishJob(data: PublishJobData): Promise<JobResult> {
       });
       await db.auditEvent.create({
         data: {
-          organizationId: ORG.id, actorUserId: 'system', action: 'publish.failed',
+          organizationId, actorUserId: null, action: 'publish.failed',
           target: variationId, detail: out.error ?? 'unknown error',
         },
       });
@@ -192,7 +202,7 @@ export async function runPublishJob(data: PublishJobData): Promise<JobResult> {
     });
     await db.auditEvent.create({
       data: {
-        organizationId: ORG.id, actorUserId: 'system', action: 'publish.succeeded',
+        organizationId, actorUserId: null, action: 'publish.succeeded',
         target: variationId, detail: out.url ?? out.id ?? 'published',
       },
     });

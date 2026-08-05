@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 import { dbAvailable } from '@/lib/db';
 import { bestTimeFor, learn } from '@/lib/learning';
 import { performanceSuggestions } from '@/lib/suggest-performance';
-import { BRANDS, CAMPAIGNS, ORG } from '@/lib/demo-data';
+import { BRANDS, CAMPAIGNS } from '@/lib/demo-data';
+import { handle, require_ } from '@/lib/auth/guard';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,19 +15,22 @@ export const dynamic = 'force-dynamic';
  * about when to post.
  */
 export async function GET(req: Request) {
+  return handle(async () => {
   if (!(await dbAvailable())) {
     return NextResponse.json({ ok: false, reason: 'no-database' }, { status: 503 });
   }
+  const principal = await require_('read');
+  const ORG_ID = principal.organizationId;
 
   const brandId = new URL(req.url).searchParams.get('brandId') ?? undefined;
 
   try {
-    const learning = await learn(ORG.id, brandId);
+    const learning = await learn(ORG_ID, brandId);
     const bestTimes = await Promise.all(
       (brandId ? BRANDS.filter((b) => b.id === brandId) : BRANDS).map(async (b) => ({
         brandId: b.id,
         brandName: b.name,
-        ...(await bestTimeFor(ORG.id, b.id)),
+        ...(await bestTimeFor(ORG_ID, b.id)),
       }))
     );
 
@@ -40,6 +44,8 @@ export async function GET(req: Request) {
 
     return NextResponse.json({ ok: true, learning, bestTimes, suggestions });
   } catch (e) {
-    return NextResponse.json({ ok: false, reason: (e as Error).message }, { status: 500 });
+    console.error('[learning] failed', e);
+    return NextResponse.json({ ok: false, reason: 'Could not read your results.' }, { status: 500 });
   }
+  });
 }

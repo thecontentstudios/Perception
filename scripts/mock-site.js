@@ -18,7 +18,9 @@ const page = `<!doctype html>
 <head>
   <meta charset="utf-8">
   <title>GreenScape Landscaping — Free Quote</title>
-  <script src="${APP}/p.js" async></script>
+  <!-- The install line, exactly as a customer would paste it: one tag,
+       carrying the workspace's public key. -->
+  <script src="${APP}/p.js?key=pk_demo_greenscape_workspace" async></script>
 </head>
 <body>
   <h1>Get a free fall cleanup quote</h1>
