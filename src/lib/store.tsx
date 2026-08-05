@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useMemo, useReducer, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, useReducer, useState, type ReactNode } from 'react';
 import {
   ACCOUNTS, APPROVALS, AUDIT, BRANDS, CAMPAIGNS, CONTACTS, CONTENT_ITEMS,
   CONVERSATIONS, DESTINATIONS, DISCOVERABLE_DESTINATIONS, MEDIA, ORG, PERFORMANCE, SEGMENTS, TEMPLATES, TODAY, USERS, VARIATIONS,
@@ -42,6 +42,7 @@ type Action =
   | { type: 'setAltText'; mediaId: string; altText: string }
   | { type: 'conversationStatus'; conversationId: string; status: Conversation['status'] }
   | { type: 'setBrand'; brandId: string }
+  | { type: 'hydrate'; workspace: Partial<AppState> }
   | { type: 'toggleDestination'; destinationId: string }
   | { type: 'mapDestination'; destinationId: string; brandId: string | null }
   | { type: 'connectAccount'; accountId: string; destinationIds: string[] }
@@ -161,6 +162,10 @@ function reducer(state: AppState, a: Action): AppState {
       };
     case 'setBrand':
       return { ...state, activeBrandId: a.brandId };
+    case 'hydrate':
+      // Replace fixture collections with database rows, keeping UI-only state
+      // (the active brand filter) so hydrating doesn't yank the view around.
+      return { ...state, ...a.workspace, activeBrandId: state.activeBrandId };
     case 'toggleDestination':
       return {
         ...state,
@@ -270,6 +275,8 @@ const initialState: AppState = {
 export interface AppApi {
   state: AppState;
   dispatch: (a: Action) => void;
+  /** Where the data on screen came from. */
+  source: 'loading' | 'database' | 'fixtures';
   // lookups
   campaignById: (id: string) => Campaign | undefined;
   brandById: (id: string) => Brand | undefined;
@@ -293,6 +300,31 @@ const Ctx = createContext<AppApi | null>(null);
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState);
+  const [source, setSource] = useState<'loading' | 'database' | 'fixtures'>('loading');
+
+  /**
+   * Hydrate from Postgres when it's available, otherwise keep the fixtures.
+   * Rendering starts against fixtures so the first paint is never blank, and
+   * the swap is a single dispatch once rows arrive.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/workspace')
+      .then((r) => r.json())
+      .then((d) => {
+        if (cancelled) return;
+        if (d.source === 'database' && d.workspace) {
+          dispatch({ type: 'hydrate', workspace: d.workspace });
+          setSource('database');
+        } else {
+          setSource('fixtures');
+        }
+      })
+      .catch(() => !cancelled && setSource('fixtures'));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const api = useMemo<AppApi>(() => {
     const campaignById = (id: string) => state.campaigns.find((c) => c.id === id);
@@ -345,6 +377,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return {
       state,
       dispatch,
+      source,
       destinationById,
       destinationsForAccount,
       publishableDestinations,
@@ -358,7 +391,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       visibleCampaigns,
       preflightFor,
     };
-  }, [state]);
+  }, [state, source]);
 
   return <Ctx.Provider value={api}>{children}</Ctx.Provider>;
 }

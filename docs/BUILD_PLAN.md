@@ -117,3 +117,44 @@ schema — and is now a first-class model with variations pointing at it.
 npm run db:migrate     # apply migrations
 npm run db:seed        # load the demo workspace
 ```
+
+### Phase 1.2 — Read path ✅
+
+Every screen now renders database rows. Three new pieces:
+
+- **`src/lib/db.ts`** — Prisma client cached on `globalThis` so hot reload
+  doesn't open a new connection pool per edit, plus `dbAvailable()`.
+- **`src/lib/queries.ts`** — `loadWorkspace()`, a translation layer rather than
+  a rewrite. The domain types in `types.ts` were already right; the job was to
+  satisfy them from Postgres. Ten flat queries in a `Promise.all` beat one deep
+  `include` tree that would return a cartesian product the UI has to unpick.
+- **`src/app/api/workspace/route.ts`** — reports `source: 'database' |
+  'fixtures'` and **degrades to fixtures on any failure**, so the clone-and-run
+  promise in the README still holds without Postgres.
+
+The store hydrates in one dispatch after first paint, so the app is never
+blank and the fixtures act as an instant skeleton. A pill in the topbar says
+which one you're looking at, because a prototype that quietly stops persisting
+is worse than one that never claimed to.
+
+**Where the friction actually was:** dates and enums, both invisible until
+runtime. Prisma returns `Date`; the UI compares `'YYYY-MM-DD'` strings so the
+calendar renders identically in every timezone. And `.toLowerCase()` on a
+database enum is one typo away from a value no `switch` handles, which
+TypeScript cannot catch through the cast. Both are now asserted.
+
+**Verified against the acceptance test.** Changing a row directly in
+Postgres — `UPDATE "Campaign" SET name = …` — and reloading showed the new
+name on Campaigns; the same for a destination on Connections. That is the
+check that can't be faked by a stale fixture.
+
+`npm run test:unit` gained a **read-path round trip**: the fixtures seeded the
+database, so loading it back must reproduce them, field by field. It skips
+with a note when `DATABASE_URL` is unset rather than failing a fresh clone.
+`npm run test:ui` gained a check that the source badge matches what
+`/api/workspace` actually reports — a topbar that says "Database" over fixture
+data would be worse than no badge at all.
+
+One honest caveat: the fixtures are still imported, deliberately, as the
+first-paint fallback. They are no longer the *source* — they are the
+seed data and the offline default.

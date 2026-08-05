@@ -402,6 +402,30 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
   parseFloat(dur) < 0.05 ? ok('motion suppressed under prefers-reduced-motion') : bad('motion not suppressed: ' + dur);
   await ctx2.close();
 
+  console.log('\n== 9. Data source badge tells the truth ==');
+  {
+    // Whether this run has Postgres or not, the badge must match reality —
+    // a topbar that says "Database" over fixture data is worse than no badge.
+    const api = await page.evaluate(() => fetch('/api/workspace').then((r) => r.json()));
+    console.log('  /api/workspace source:', api.source, api.reason ? `(${api.reason})` : '');
+    await page.goto('http://localhost:3000/campaigns', { waitUntil: 'networkidle' });
+    await page.waitForTimeout(500);
+    const badge = (await page.$eval('.demo-clock', (e) => e.textContent)).trim();
+    const want = api.source === 'database' ? 'Database' : 'Demo data';
+    badge === want ? ok(`badge reads "${badge}", matching the API`) : bad(`badge says "${badge}" but API says ${api.source}`);
+
+    if (api.source === 'database') {
+      // Hydration has to actually replace the fixtures, not sit alongside them.
+      const w = api.workspace;
+      const counts = [w.campaigns.length, w.items.length, w.variations.length, w.destinations.length];
+      counts.every((n) => n > 0) ? ok(`workspace hydrated from rows (${counts.join('/')})`) : bad('empty collection in DB workspace');
+      const cards = await page.$$eval('.card', (e) => e.length);
+      cards >= w.campaigns.length ? ok('campaigns page rendered a card per DB campaign') : bad('fewer cards than DB campaigns');
+    } else {
+      ok('running on fixtures — badge and hydration check skipped by design');
+    }
+  }
+
   console.log('\n' + (errors.length ? 'PAGE ERRORS:\n' + errors.join('\n') : 'no page errors'));
   console.log(fail.length ? `\n${fail.length} FAILURE(S)` : '\nALL CHECKS PASSED');
   await browser.close();

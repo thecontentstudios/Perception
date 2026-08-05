@@ -128,5 +128,87 @@ console.log('\n== PKCE + state ==');
   safeEqual('abc', 'abc') && !safeEqual('abc', 'abd') ? ok('constant-time compare behaves') : bad('state compare wrong');
 }
 
-console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL UNIT CHECKS PASSED');
-process.exit(failures ? 1 : 0);
+/**
+ * The read path needs a live database, so it is the one async section here.
+ * It skips rather than fails without `DATABASE_URL`, because `npm test` has to
+ * keep passing on a fresh clone that has not set Postgres up yet.
+ */
+async function readPathChecks() {
+  console.log('\n== Read path: database rows round-trip to domain shapes ==');
+  // Next loads .env for the app; a bare tsx process does not, and silently
+  // skipping because of that would be worse than not having the check.
+  (await import('dotenv')).config({ quiet: true });
+  if (!process.env.DATABASE_URL) {
+    console.log('  SKIP no DATABASE_URL — run `npm run db:migrate && npm run db:seed` to cover this');
+    return;
+  }
+  // The strongest check available: the fixtures seeded the database, so
+  // loading it back must reproduce them. Anything the translation layer drops,
+  // renames, or reshapes shows up as a diff against its own input.
+  const { loadWorkspace } = await import('../src/lib/queries');
+  const { db } = await import('../src/lib/db');
+  const fx = await import('../src/lib/demo-data');
+
+  try {
+    const w = await loadWorkspace(fx.ORG.id);
+
+    eq(w.campaigns.length, fx.CAMPAIGNS.length, 'every campaign came back');
+    eq(w.items.length, fx.CONTENT_ITEMS.length, 'every content item came back');
+    eq(w.variations.length, fx.VARIATIONS.length, 'every variation came back');
+    eq(w.destinations.length, fx.DESTINATIONS.length, 'every destination came back');
+
+    // Dates are the fragile part: the UI compares 'YYYY-MM-DD' strings, so a
+    // Date leaking through — or a timezone shifting one — breaks the calendar
+    // silently on machines east of UTC.
+    const day = /^\d{4}-\d{2}-\d{2}$/;
+    const minute = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
+    w.campaigns.every((c) => day.test(c.startDate) && day.test(c.endDate))
+      ? ok('campaign dates are day strings, not Dates')
+      : bad('a campaign date is not a YYYY-MM-DD string');
+    w.variations.every((v) => !v.scheduledAt || minute.test(v.scheduledAt))
+      ? ok('scheduled times are minute strings')
+      : bad('a scheduledAt is not a YYYY-MM-DDTHH:mm string');
+
+    // Field-level round trip on the campaign the whole demo hangs on.
+    const fall = w.campaigns.find((c) => c.id === 'c-fall');
+    const fallFx = fx.CAMPAIGNS.find((c) => c.id === 'c-fall')!;
+    eq(fall?.name, fallFx.name, 'campaign name survives the round trip');
+    eq(fall?.status, fallFx.status, 'status lowercased back to the domain union');
+    eq(fall?.startDate, fallFx.startDate, 'start date unshifted by timezone');
+    eq(fall?.cta, fallFx.cta, 'call to action reassembled from its two columns');
+
+    // campaignId is a fixture convenience the schema does not store; the read
+    // path has to rebuild it through ContentItem or every screen loses its
+    // grouping.
+    const orphans = w.variations.filter((v) => !v.campaignId).length;
+    eq(orphans, 0, 'every variation resolved its campaign through the content item');
+
+    // The one failed publish is stored as a PublicationAttempt row and has to
+    // come back as the inline `failure` the Home screen renders.
+    const failed = w.variations.filter((v) => v.failure);
+    eq(failed.length, fx.VARIATIONS.filter((v) => v.failure).length, 'the failed publish survives as an attempt row');
+    eq(failed[0]?.failure?.code, fx.VARIATIONS.find((v) => v.failure)!.failure!.code, 'failure code preserved');
+
+    // Media placeholders are encoded into storageKey by the seed; if that
+    // decode drifts, the library renders grey boxes instead of the demo art.
+    const withArt = w.media.filter((m) => m.gradient[0].startsWith('#') && m.glyph).length;
+    eq(withArt, w.media.length, 'every media asset decoded its placeholder art');
+
+    // Enum translation is one .toLowerCase() away from producing values no
+    // switch statement handles, and TypeScript cannot catch a bad cast.
+    const { CHANNEL_META } = await import('../src/lib/channels');
+    const badChannel = w.variations.find((v) => !(v.channel in CHANNEL_META));
+    badChannel
+      ? bad(`variation channel '${badChannel.channel}' is not a domain channel`)
+      : ok('every channel value is a legal domain channel');
+  } catch (e) {
+    bad(`read path threw: ${(e as Error).message}`);
+  } finally {
+    await db.$disconnect();
+  }
+}
+
+readPathChecks().then(() => {
+  console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL UNIT CHECKS PASSED');
+  process.exit(failures ? 1 : 0);
+});

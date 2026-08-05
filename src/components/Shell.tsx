@@ -87,7 +87,7 @@ const NAV_SECTIONS: { label: string; items: NavItem[] }[] = [
 
 export function Shell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  const { state, dispatch } = useApp();
+  const { state, dispatch, source } = useApp();
   const [railed, setRailed] = usePersisted('perception.nav.railed', false);
 
   const openInbox = state.conversations.filter((c) => c.status === 'open').length;
@@ -173,10 +173,21 @@ export function Shell({ children }: { children: ReactNode }) {
           <span className="spacer" />
           <span
             className="demo-clock"
-            title="The prototype clock is pinned so live, scheduled, and failed items all have examples."
+            title={
+              source === 'database'
+                ? 'Loaded from Postgres — changes persist.'
+                : 'In-memory demo workspace — changes reset on reload.'
+            }
           >
-            <span className="dot" aria-hidden />
-            Demo clock · {fmtLong(TODAY)}
+            <span
+              className="dot"
+              style={{ background: source === 'database' ? 'var(--st-good)' : 'var(--st-warning)' }}
+              aria-hidden
+            />
+            {source === 'database' ? 'Database' : 'Demo data'}
+          </span>
+          <span className="demo-clock" title="The prototype clock is pinned so live, scheduled, and failed items all have examples.">
+            {fmtLong(TODAY)}
           </span>
           <span className="avatar" title="Dana Reyes · Owner">
             DR
