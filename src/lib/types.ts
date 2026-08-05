@@ -26,6 +26,7 @@ export type Channel =
   | 'x'
   | 'threads'
   | 'bluesky'
+  | 'mastodon'
   | 'pinterest'
   | 'reddit'
   | 'nextdoor'

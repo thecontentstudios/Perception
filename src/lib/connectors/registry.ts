@@ -1,6 +1,7 @@
 import type { Channel } from '../types';
 import type { ConnectorAdapter } from './contract';
 import { facebookAdapter } from './facebook';
+import { mastodonAdapter } from './mastodon';
 import { instagramAdapter } from './instagram';
 import { linkedinAdapter } from './linkedin';
 import { googleBusinessAdapter } from './google-business';
@@ -33,6 +34,7 @@ export const CONNECTORS: Record<Channel, ConnectorAdapter> = {
   x: xAdapter,
   threads: threadsAdapter,
   bluesky: blueskyAdapter,
+  mastodon: mastodonAdapter,
   pinterest: pinterestAdapter,
   reddit: redditAdapter,
   nextdoor: nextdoorAdapter,

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { summaries } from '@/lib/oauth/store';
 import { publishToBluesky, graphemeLength } from '@/lib/publishers/bluesky';
+import { mastodonContext, mastodonPublisher } from '@/lib/publishers/mastodon';
 
 /**
  * Publish for real, through a stored grant.
@@ -30,13 +31,39 @@ export async function POST(request: Request) {
   const text = (body.text ?? '').trim();
   if (!text) return NextResponse.json({ ok: false, error: 'Nothing to post.' }, { status: 400 });
 
+  // Mastodon goes through the Publisher interface; Bluesky still uses its
+  // original entry point (same behaviour, different call shape) until both
+  // are migrated behind one registry.
+  if (body.channel === 'mastodon') {
+    const ctx = mastodonContext();
+    if (!ctx) {
+      return NextResponse.json(
+        { ok: false, error: 'Mastodon is not connected.', needsReconnect: true },
+        { status: 428 }
+      );
+    }
+    if (body.dryRun) {
+      const c = mastodonPublisher.check(text);
+      return NextResponse.json({
+        ok: c.ok,
+        dryRun: true,
+        graphemes: c.length,
+        limit: ctx.limit,
+        account: ctx.handle,
+        error: c.error,
+      });
+    }
+    const result = await mastodonPublisher.publish(text, { idempotencyKey: body.idempotencyKey });
+    return NextResponse.json(result, { status: result.ok ? 200 : 502 });
+  }
+
   if (body.channel !== 'bluesky') {
     return NextResponse.json(
       {
         ok: false,
         error: `Live publishing for "${body.channel}" is not implemented yet.`,
         detail:
-          'Bluesky is the only channel that can publish for real today; the rest need their platform app registered and reviewed first.',
+          'Bluesky and Mastodon can publish for real today; the rest need their platform app registered and reviewed first.',
       },
       { status: 501 }
     );
@@ -79,7 +106,7 @@ export async function GET() {
       channel: g.channel,
       accountLabel: g.accountLabel,
       externalAccountId: g.externalAccountId,
-      canPublish: g.channel === 'bluesky',
+      canPublish: g.channel === 'bluesky' || g.channel === 'mastodon',
     }));
-  return NextResponse.json({ live, publishableChannels: ['bluesky'] });
+  return NextResponse.json({ live, publishableChannels: ['bluesky', 'mastodon'] });
 }

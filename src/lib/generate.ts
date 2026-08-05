@@ -56,6 +56,7 @@ const POST_TIME: Record<Channel, string> = {
   x: '09:15',
   threads: '12:30',
   bluesky: '13:00',
+  mastodon: '12:45',
   pinterest: '20:00',
   reddit: '11:00',
   nextdoor: '10:30',
@@ -76,6 +77,7 @@ const FORMAT_FOR: Record<Channel, ContentFormat> = {
   x: 'post',
   threads: 'post',
   bluesky: 'post',
+  mastodon: 'post',
   pinterest: 'pin',
   reddit: 'post',
   nextdoor: 'post',
@@ -152,7 +154,7 @@ export function generateCampaign(input: ComposerInput): GeneratedCampaign {
   const social = input.channels.filter((c) =>
     [
       'facebook', 'instagram', 'linkedin', 'google_business', 'tiktok', 'youtube',
-      'x', 'threads', 'bluesky', 'pinterest', 'reddit', 'nextdoor', 'snapchat',
+      'x', 'threads', 'bluesky', 'mastodon', 'pinterest', 'reddit', 'nextdoor', 'snapchat',
     ].includes(c)
   );
 
@@ -168,7 +170,7 @@ export function generateCampaign(input: ComposerInput): GeneratedCampaign {
 
   social.forEach((channel, i) => {
     const day = addDays(input.startDate, i < 2 ? 0 : 1);
-    const shortForm = channel === 'x' || channel === 'threads' || channel === 'bluesky';
+    const shortForm = channel === 'x' || channel === 'threads' || channel === 'bluesky' || channel === 'mastodon';
     const body = shortForm
       ? `${input.offer ? input.offer + deadline + '. ' : ''}${input.promoting}`.trim().slice(0, channel === 'x' ? 270 : 290)
       : channel === 'instagram'

@@ -34,6 +34,7 @@ same capability sheet that drives validation renders the Connections screen.
 | YouTube | Data API v3 | 2 | video, short | ✔ | ✔ | ✔ | ✔ | ✔ | **Uploads from unaudited projects locked private; quota cost high** |
 | X (Twitter) | X API v2 | 2 | post (280 chars, ≤2:20 video) | ✖ | ✖ | ✔ | ✔ | ✔ | **Posting requires a paid API tier — price it before committing** |
 | Threads | Threads API (Meta) | 2 | post (500 chars, 1 tag) | ✖ | ✖ | ✔ | ✔ | ✔ | GA API; rides the same Meta app + review |
+| Mastodon | Mastodon REST API v1 | 2 | post (per-instance limit, often 500–1500) | ✔ | ✔ | ✔ | ✔ | ✔ | Open network, **no review**; token created in the user's own instance settings. Limit and rules are per-instance and read at connect time |
 | Bluesky | AT Protocol | 2 | post (300 chars) | ✖ | ✖ | ✔ | ✖ | ✔ | Open protocol, **no review at all** — easiest connector to ship; no ads product |
 | Pinterest | Pinterest API v5 | 2 | pin (2:3 best) | ✖ | ✔ | ✔ | ✔ | ✖ | Long content half-life; every Pin needs a destination link (preflight enforces) |
 | Reddit | Reddit Data API | 2 | post | ✖ | ✔ | ✔ | ✖ | ✔ | Per-subreddit self-promotion rules; hashtags flagged as spam by preflight |

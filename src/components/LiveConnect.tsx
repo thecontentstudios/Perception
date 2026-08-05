@@ -62,6 +62,99 @@ function Copyable({ value }: { value: string }) {
   );
 }
 
+function MastodonConnect({ onDone }: { onDone: () => void }) {
+  const [host, setHost] = useState('');
+  const [accessToken, setAccessToken] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; message: string; fix?: string } | null>(null);
+
+  async function submit() {
+    setBusy(true);
+    setResult(null);
+    try {
+      const res = await fetch('/api/connect/mastodon', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ host, accessToken }),
+      });
+      const data = await res.json();
+      if (res.ok && data.connected) {
+        setResult({
+          ok: true,
+          message: `Connected as ${data.account}`,
+          fix: data.note ?? `Character limit read from the server: ${data.characterLimit}.`,
+        });
+        setAccessToken('');
+        onDone();
+      } else {
+        setResult({ ok: false, message: data.error ?? 'Connection failed.', fix: data.fix });
+      }
+    } catch (e) {
+      setResult({ ok: false, message: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card card-pad" style={{ borderColor: 'var(--accent)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 6 }}>
+        <ChannelIcon channel="mastodon" size={22} />
+        <div>
+          <strong style={{ fontSize: 13 }}>Mastodon</strong>
+          <div className="card-sub">Connects for real — your instance, your token</div>
+        </div>
+        <span className="pill published" style={{ marginLeft: 'auto' }}>
+          ready now
+        </span>
+      </div>
+
+      <p style={{ color: 'var(--ink-2)', fontSize: 12.5, marginTop: 4 }}>
+        On your own instance go to <strong>Preferences → Development → New application</strong>, tick{' '}
+        <code className="mono">write:statuses</code>, and copy the access token. No developer console,
+        no review.
+      </p>
+
+      <div className="field">
+        <label htmlFor="ma-host">Instance</label>
+        <input
+          id="ma-host"
+          className="input"
+          placeholder="mastodon.social"
+          value={host}
+          onChange={(e) => setHost(e.target.value)}
+        />
+      </div>
+      <div className="field">
+        <label htmlFor="ma-token">Access token</label>
+        <input
+          id="ma-token"
+          className="input"
+          type="password"
+          placeholder="your access token"
+          value={accessToken}
+          onChange={(e) => setAccessToken(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && !busy && submit()}
+        />
+      </div>
+
+      <button className="btn primary" onClick={submit} disabled={busy || !host || !accessToken}>
+        {busy ? 'Connecting…' : 'Connect Mastodon'}
+      </button>
+
+      {result && (
+        <div className={`notice ${result.ok ? 'success' : 'info'}`} style={{ marginTop: 10, display: 'block' }}>
+          <div style={{ fontWeight: 650 }}>
+            {result.ok ? '✓ ' : ''}
+            {result.message}
+          </div>
+          {result.fix && <div style={{ fontSize: 11.5, marginTop: 3 }}>{result.fix}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function BlueskyConnect({ onDone }: { onDone: () => void }) {
   const [handle, setHandle] = useState('');
   const [appPassword, setAppPassword] = useState('');
@@ -211,7 +304,13 @@ export function LiveConnect() {
             </div>
           )}
 
-          <BlueskyConnect onDone={load} />
+          <div className="section-label" style={{ marginTop: 0 }}>
+            Ready now — no app registration needed
+          </div>
+          <div className="grid cols-2">
+            <BlueskyConnect onDone={load} />
+            <MastodonConnect onDone={load} />
+          </div>
 
           <div>
             <div className="section-label" style={{ marginTop: 0 }}>

@@ -19,6 +19,7 @@ export const CHANNEL_META: Record<
   x: { label: 'X (Twitter)', short: 'X', color: '#000000' },
   threads: { label: 'Threads', short: 'TH', color: '#33322e' },
   bluesky: { label: 'Bluesky', short: 'BSK', color: '#1185fe' },
+  mastodon: { label: 'Mastodon', short: 'MA', color: '#6364ff' },
   pinterest: { label: 'Pinterest', short: 'PIN', color: '#c8102e' },
   reddit: { label: 'Reddit', short: 'RDT', color: '#ff4500' },
   nextdoor: { label: 'Nextdoor', short: 'ND', color: '#5b8c1a' },
@@ -99,6 +100,14 @@ function Glyph({ channel }: { channel: Channel }) {
         <text x="12" y="16.5" textAnchor="middle" fontSize="14" fontWeight="700" fill={stroke} fontFamily="Arial, sans-serif">
           @
         </text>
+      );
+    case 'mastodon':
+      return (
+        <g fill="none" stroke={stroke} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M7.5 15.5c3 .8 6 .8 9 0" />
+          <path d="M8 13V9.6a2 2 0 0 1 4 0V13m0-3.4a2 2 0 0 1 4 0V13" />
+          <path d="M6 8.5c0-2.4 1.4-4 6-4s6 1.6 6 4v4c0 3-1.8 4.6-6 4.8-2 .1-3.4 0-4.6-.4" />
+        </g>
       );
     case 'bluesky':
       return (

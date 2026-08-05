@@ -5,6 +5,7 @@
  */
 import { buildFacets, graphemeLength } from '../src/lib/publishers/bluesky';
 import { encrypt, decrypt, pkceChallenge, safeEqual } from '../src/lib/oauth/crypto';
+import { mastodonPublisher } from '../src/lib/publishers/mastodon';
 
 let failures = 0;
 const ok = (m: string) => console.log('  PASS ' + m);
@@ -44,6 +45,29 @@ console.log('\n== Facet byte offsets (UTF-8 bytes, not string indices) ==');
 {
   const f = buildFacets('no links or tags here');
   eq(f.length, 0, 'plain text yields no facets');
+}
+
+console.log('\n== Mastodon counts text its own way ==');
+{
+  // Mastodon counts every URL as a flat 23 characters, whatever its length.
+  const shortUrl = 'See https://a.co';
+  const longUrl = 'See https://greenscapenj.com/fall-cleanup?utm_campaign=fall-2026&utm_source=mastodon';
+  eq(
+    mastodonPublisher.measure(shortUrl),
+    mastodonPublisher.measure(longUrl),
+    'a long tracking URL costs the same as a short one'
+  );
+  eq(mastodonPublisher.measure('hello'), 5, 'plain text counted normally');
+
+  // The two platforms must not share a counting rule.
+  const mixed = 'Fall cleanup 👨‍👩‍👧‍👦 https://greenscapenj.com/a-very-long-tracking-url';
+  const bs = graphemeLength(mixed);
+  const ma = mastodonPublisher.measure(mixed);
+  bs !== ma
+    ? ok(`Bluesky (${bs}) and Mastodon (${ma}) count the same text differently, as they should`)
+    : bad('both publishers counted identically — a platform rule is being flattened');
+
+  eq(mastodonPublisher.capabilities.limitIsPerInstance, true, 'Mastodon limit is marked per-instance');
 }
 
 console.log('\n== Token encryption ==');

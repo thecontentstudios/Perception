@@ -40,7 +40,36 @@ What the product *can* do is make it painless. The setup panel in
 - the exact env var names to set, copyable,
 - the scopes we will request and how destinations get listed.
 
-## Bluesky works right now
+## Two connectors work right now
+
+Both need no developer console and no review:
+
+| | How you connect | Where the limit comes from |
+|---|---|---|
+| **Bluesky** | Handle + app password (Settings → App Passwords) | Protocol: 300 graphemes |
+| **Mastodon** | Instance host + access token (Preferences → Development) | **The server** — read from `/api/v1/instance` at connect time |
+
+They were chosen to be dissimilar on purpose. If one interface fits a
+repo-and-DID model *and* a per-user-hostname REST model, it will fit the
+Meta/LinkedIn/Google shapes too. Concretely, they disagree about almost
+everything that matters:
+
+- **Counting.** Bluesky counts graphemes and counts URLs in full. Mastodon
+  counts code points and counts every URL as a flat 23 characters. The same
+  string measures 64 on one and 44 on the other; the suite asserts they
+  *disagree*, because a shared counter would be flattening a real rule.
+- **Limits.** Bluesky's 300 is fixed by the protocol. Mastodon's is whatever
+  the instance says — plenty run 1500. Assuming the 500 default would reject
+  perfectly valid posts, so we read the server's own configuration and store
+  it with the grant.
+- **Expiry.** Bluesky access JWTs are short-lived, so a 401 means *refresh and
+  retry*. Mastodon tokens don't expire, so a 401 means *revoked* — reconnect,
+  never retry. Same status code, opposite correct response.
+- **Idempotency.** Bluesky needs it built by us. Mastodon honours an
+  `Idempotency-Key` header natively; verified against a mock instance that a
+  repeated key returns the original status and creates no second post.
+
+## Bluesky
 
 AT Protocol needs no developer app, no console, and no review. Create an app
 password in **Bluesky → Settings → App Passwords**, paste it with your handle,

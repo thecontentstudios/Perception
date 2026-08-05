@@ -302,6 +302,16 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
     ? ok('publish refuses without a grant instead of faking success')
     : bad('publish did not refuse cleanly: ' + JSON.stringify(ncBody));
 
+  const pubChannels = await (await page.request.get('http://localhost:3000/api/publish')).json();
+  pubChannels.publishableChannels?.includes('mastodon') && pubChannels.publishableChannels?.includes('bluesky')
+    ? ok('two independent publishers are wired (bluesky + mastodon)')
+    : bad('expected both publishers: ' + JSON.stringify(pubChannels.publishableChannels));
+
+  const badHost = await page.request.post('http://localhost:3000/api/connect/mastodon', {
+    data: { host: 'not a host', accessToken: 'x' },
+  });
+  badHost.status() === 400 ? ok('Mastodon rejects a malformed instance address') : bad('bad host accepted');
+
   const unimpl = await page.request.post('http://localhost:3000/api/publish', {
     data: { channel: 'instagram', text: 'hello' },
   });
