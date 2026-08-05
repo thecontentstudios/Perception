@@ -852,6 +852,60 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
     }
   }
 
+  console.log('\n== 15. What we learned: readable, and every claim traced ==');
+  {
+    const api = await page.evaluate(() => fetch('/api/workspace').then((r) => r.json()));
+    if (api.source !== 'database') {
+      ok('no database — learning page skipped by design');
+    } else {
+      await page.setViewportSize({ width: 1440, height: 960 });
+      await page.goto('http://localhost:3000/learned', { waitUntil: 'networkidle' });
+      await page.waitForTimeout(1000);
+
+      const text = await page.evaluate(() => document.body.innerText);
+
+      // The sample has to come first, before any conclusion. A reader needs to
+      // know how much this rests on before deciding whether to believe it.
+      /Based on \d+ published posts?, [\d,]+ clicks/.test(text)
+        ? ok('states its sample before any conclusion')
+        : bad('no sample statement on the page');
+
+      const findings = await page.$$eval('.convo .cv-text', (els) => els.map((e) => e.innerText.trim()));
+      findings.length > 0 ? ok(`${findings.length} claims on the page`) : bad('no claims rendered');
+
+      // Every claim carries a number. A sentence with no number is an opinion.
+      const numberless = findings.filter((f) => !/\d/.test(f));
+      numberless.length === 0
+        ? ok('every claim contains the figure behind it')
+        : bad(`${numberless.length} claim(s) with no number: ${numberless[0]?.slice(0, 60)}`);
+
+      // Written for a non-marketer: no jargon that would send someone away.
+      const jargon = ['CTR', 'CPM', 'ROAS', 'attribution model', 'engagement rate', 'impressions served'];
+      const found = jargon.filter((j) => text.includes(j));
+      found.length === 0 ? ok('no marketing jargon') : bad(`jargon on the page: ${found.join(', ')}`);
+
+      // Per-brand times, and an honest label when one is a default.
+      text.includes('When to post') ? ok('says when to post, per business') : bad('no posting-time section');
+
+      // Narrowing to one business must actually change the answer, not just
+      // relabel the same one.
+      const all = await page.evaluate(() => fetch('/api/learning').then((r) => r.json()));
+      const one = await page.evaluate(() => fetch('/api/learning?brandId=b-harbor').then((r) => r.json()));
+      one.learning.sample.posts < all.learning.sample.posts
+        ? ok(`narrowing to one business narrows the evidence (${all.learning.sample.posts} → ${one.learning.sample.posts} posts)`)
+        : bad('the brand filter did not change the sample');
+
+      // The refusal path has to be reachable and honest.
+      const empty = await page.evaluate(() => fetch('/api/learning?brandId=b-nope').then((r) => r.json()));
+      empty.learning.notEnoughYet && empty.bestTimes.every((t) => !t.learned || t.reason)
+        ? ok(`declines to conclude when there is nothing: "${empty.learning.notEnoughYet.slice(0, 60)}…"`)
+        : bad('empty brand produced conclusions anyway');
+
+      const errs = errors.filter((e) => !e.includes('favicon'));
+      errs.length === 0 ? ok('page renders without errors') : bad(`page error: ${errs[0]}`);
+    }
+  }
+
   console.log('\n' + (errors.length ? 'PAGE ERRORS:\n' + errors.join('\n') : 'no page errors'));
   console.log(fail.length ? `\n${fail.length} FAILURE(S)` : '\nALL CHECKS PASSED');
   await browser.close();

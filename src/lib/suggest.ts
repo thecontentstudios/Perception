@@ -28,7 +28,14 @@ export type SuggestionSource =
   | 'dormant_profile'
   | 'missing_profile'
   | 'seasonal'
-  | 'faq';
+  | 'faq'
+  /**
+   * Drawn from what this business's own posts actually did. The only source
+   * whose evidence is the owner's results rather than their website — and the
+   * one that makes the product compound, because it gets better the longer it
+   * runs.
+   */
+  | 'performance';
 
 export const SOURCE_LABEL: Record<SuggestionSource, string> = {
   live_offer: 'Live offer on your site',
@@ -39,6 +46,7 @@ export const SOURCE_LABEL: Record<SuggestionSource, string> = {
   missing_profile: 'Missing profile',
   seasonal: 'Seasonal timing',
   faq: 'Question customers ask',
+  performance: 'What worked for you before',
 };
 
 export interface Suggestion {

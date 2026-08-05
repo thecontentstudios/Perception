@@ -484,3 +484,52 @@ never as a number, and that the words "not measured" actually reach the screen.
 The phase gate was: *the sentence "this campaign generated N quote requests" is
 computed, not written.* It is — and the numbers it can't compute say so
 instead of guessing. Phase 3 next: the learning loop.
+
+---
+
+## Phase 3 — Learning loop ✅ (3.1–3.4)
+
+`src/lib/learning.ts` joins every published post to the results it caused and
+groups by the things an owner can change: format, channel, weekday, time of
+day. `/learned` is the artifact. `bestTimeFor()` answers scheduling from a
+brand's own history.
+
+**The discipline is refusing to answer.** Two posts is not a pattern, and a
+finding drawn from three clicks is noise wearing a percentage sign. Stating it
+confidently teaches people to distrust everything else the product says. So
+there are floors — 3 posts and 25 clicks per bucket, a 1.25× minimum
+difference — and anything under them is withheld rather than hedged. A brand
+with no history gets a general default *that says it is a default*.
+
+**How this is tested, and why it's the strongest check available.** The seed
+plants exactly two patterns and nothing else: short videos convert ~3× plain
+posts, and each business has its own peak hour. The tests assert the loop
+*rediscovers* them from the rows. A broken query can still return a
+well-formed answer; it cannot invent a 3× lift that is actually in the data.
+
+**What the tests caught:**
+
+- **The demo had no history to learn from.** The fixtures' 16 published posts
+  are a snapshot of one campaign mid-flight — not enough for any bucket to
+  clear the floor. The loop correctly said nothing, which read as a bug and
+  wasn't. The seed now includes twelve weeks of back catalogue, which is what
+  a real account would have.
+- **A stride bug flattened the history.** `HOURS[(n * 3) % 6]` only ever yields
+  indices 0 and 3, so two of six hours were used and every brand's "best time"
+  came out identical. Stride 5 is coprime with 6 and walks all six.
+- **Best-time was over-sliced.** Bucketing one brand's history into 24 hourly
+  buckets guaranteed every one was too small — only the brand with double the
+  history got an answer at all. It now decides on three parts of the day and
+  picks a representative hour inside the winner, which is both statistically
+  sounder and the thing the module's own comments warned about.
+
+**Suggestions quote findings verbatim.** `performanceSuggestions` is built
+*from* `Finding` objects, and the sentence shown to the owner is the one the
+query produced — not a re-description. A suggestion that says "3× better" and
+is wrong spends the trust that makes every other suggestion worth reading, and
+re-describing a number is exactly how it and the claim drift apart. The test
+asserts the suggestion's `reasons[]` contains the finding's own sentence.
+
+`/learned` is written for someone who does not work in marketing: it states its
+sample before any conclusion, every claim carries the posts and clicks behind
+it, and the suite fails on marketing jargon.

@@ -203,6 +203,8 @@ async function main() {
     })),
   });
 
+  await seedHistory();
+
   const counts = {
     brands: await db.brand.count(),
     campaigns: await db.campaign.count(),
@@ -215,8 +217,170 @@ async function main() {
     published: await db.publishedPost.count(),
     failedAttempts: await db.publicationAttempt.count(),
     destinations: await db.publishDestination.count(),
+    trackedLinks: await db.trackedLink.count(),
+    clicks: await db.linkClick.count(),
+    conversions: await db.conversion.count(),
   };
   console.log('Seeded:', counts);
+}
+
+/**
+ * Eight weeks of back catalogue, so there is something to learn from.
+ *
+ * Twelve weeks of it: enough that each brand — not just the one with two
+ * campaigns — has a bucket that clears the sample floor. Deliberately boring content — these exist to
+ * carry results, and the calendar shows them in past months where they belong.
+ */
+async function seedBackCatalogue(): Promise<
+  { id: string; contentItemId: string; channel: string; format: string; publishedAt: string }[]
+> {
+  const FORMATS: [string, string][] = [
+    ['post', 'instagram'], ['reel', 'instagram'], ['post', 'facebook'],
+    ['update', 'google_business'], ['email', 'email'], ['reel', 'tiktok'],
+  ];
+  const HOURS = [8, 10, 12, 15, 17, 19];
+  const out: { id: string; contentItemId: string; channel: string; format: string; publishedAt: string }[] = [];
+
+  // Anchor to the demo clock so the history always sits just behind "today".
+  const today = new Date('2026-10-08T00:00:00Z');
+
+  let n = 0;
+  for (const [ci, campaign] of CAMPAIGNS.entries()) {
+    const item = CONTENT_ITEMS.find((i) => i.campaignId === campaign.id);
+    if (!item) continue;
+
+    for (let week = 1; week <= 12; week++) {
+      const [format, channel] = FORMATS[n % FORMATS.length];
+      // Stride 5 is coprime with 6, so this walks all six hours. Stride 3
+      // would only ever hit two of them — which produced a history where
+      // every brand's "best time" was identical, and no afternoon at all.
+      // Offsetting by campaign keeps the brands from converging on one answer.
+      const hour = HOURS[(n * 5 + ci * 2) % HOURS.length];
+      const at = new Date(today);
+      at.setUTCDate(at.getUTCDate() - week * 7 - (n % 5));
+      at.setUTCHours(hour, 0, 0, 0);
+
+      const id = `v-hist-${n}`;
+      await db.channelVariation.create({
+        data: {
+          id, contentItemId: item.id, channel: chan(channel), format,
+          status: 'PUBLISHED', publishedAt: at, scheduledAt: at,
+          body: `${item.coreMessage}`,
+          hashtags: [], hasUnsubscribeFooter: format === 'email',
+          ctaLabel: campaign.cta.label, ctaUrl: campaign.cta.url,
+        },
+      });
+      await db.publishedPost.create({
+        data: { variationId: id, externalId: `hist-${id}`, publishedAt: at },
+      });
+      out.push({ id, contentItemId: item.id, channel, format, publishedAt: at.toISOString().slice(0, 16) });
+      n++;
+    }
+  }
+  return out;
+}
+
+/**
+ * Click and conversion history for the posts that already went out.
+ *
+ * Phase 3 learns from results, and a learning loop with nothing to learn from
+ * can only be tested by asserting it returns nothing. So the demo workspace
+ * gets a history — and a deliberately *patterned* one:
+ *
+ *   - reels convert about three times better than plain posts
+ *   - late afternoon beats first thing in the morning
+ *
+ * Those two facts are planted here and nowhere else. The learning query has to
+ * rediscover them from the rows, which is a much stronger test than checking
+ * it produces a well-formed answer.
+ *
+ * Deterministic on purpose: a hash of the variation id stands in for
+ * randomness, so a reseed produces the same history and a failing test means
+ * the code changed rather than the dice.
+ */
+async function seedHistory() {
+  // The fixtures' sixteen published posts are a *snapshot* — one campaign
+  // mid-flight. A learning loop needs a *history*, and sixteen posts spread
+  // over two weeks cannot fill even one bucket past the sample floor, which is
+  // the loop correctly declining to answer rather than a bug.
+  //
+  // So the demo workspace gets the couple of months of back catalogue a real
+  // account would have: posts across every format and time of day, going back
+  // eight weeks, one per brand's campaigns.
+  const historical = await seedBackCatalogue();
+  const published = [...VARIATIONS.filter((v) => v.publishedAt), ...historical];
+
+  // Cheap stable hash → the same post always gets the same numbers.
+  const hash = (s: string) => {
+    let h = 2166136261;
+    for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+    return Math.abs(h);
+  };
+
+  for (const v of published) {
+    const item = CONTENT_ITEMS.find((i) => i.id === v.contentItemId);
+    if (!item) continue;
+    const publishedAt = date(v.publishedAt!);
+    const hour = publishedAt.getUTCHours();
+
+    const link = await db.trackedLink.create({
+      data: {
+        code: `seed${hash(v.id) % 100000}`,
+        variationId: v.id,
+        campaignId: item.campaignId,
+        targetUrl: CAMPAIGNS.find((c) => c.id === item.campaignId)?.cta.url ?? 'https://example.com',
+      },
+    });
+
+    const clicks = 18 + (hash(v.id) % 40);
+    // The planted pattern. Everything else about the post is irrelevant to it,
+    // so a query that finds it has genuinely found it.
+    const formatLift = v.format === 'reel' ? 3 : v.format === 'update' ? 1.5 : 1;
+
+    // Each business peaks at a different time, because real ones do — a
+    // landscaper's customers browse after work, a recording studio's are up
+    // late, a B2B tool's are at their desks. Without this the learning loop
+    // gives every brand the same answer, which is true to the data but makes
+    // the demo look like a global default wearing a per-brand label.
+    const brandId = CAMPAIGNS.find((c) => c.id === item.campaignId)?.brandId ?? '';
+    const peak: Record<string, number> = {
+      'b-green': 17, 'b-harbor': 12, 'b-velvet': 19, 'b-northwind': 10,
+    };
+    const distance = Math.abs(hour - (peak[brandId] ?? 15));
+    const hourLift = distance <= 1 ? 2.4 : distance <= 3 ? 1.3 : 0.6;
+    const conversions = Math.round(clicks * 0.06 * formatLift * hourLift);
+
+    for (let i = 0; i < clicks; i++) {
+      const at = new Date(publishedAt.getTime() + (i * 37 + (hash(v.id + i) % 900)) * 60_000);
+      const click = await db.linkClick.create({
+        data: {
+          linkId: link.id,
+          visitorId: `seed-visitor-${hash(v.id + ':' + i) % 5000}`,
+          clickedAt: at,
+          repeat: false,
+          referrer: null,
+        },
+      });
+
+      if (i < conversions) {
+        const kind = i % 5 === 0 ? 'booking' : i % 7 === 0 ? 'call' : 'quote_request';
+        await db.conversion.create({
+          data: {
+            organizationId: ORG.id,
+            campaignId: item.campaignId,
+            variationId: v.id,
+            clickId: click.id,
+            kind,
+            channel: chan(v.channel),
+            valueCents: kind === 'booking' ? 48000 : kind === 'call' ? 0 : 32000,
+            occurredAt: new Date(at.getTime() + 20 * 60_000),
+            externalId: `seed:${v.id}:${i}`,
+            attribution: { basis: 'click', seeded: true },
+          },
+        });
+      }
+    }
+  }
 }
 
 main()

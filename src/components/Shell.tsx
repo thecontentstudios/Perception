@@ -69,6 +69,11 @@ const NAV_SECTIONS: { label: string; items: NavItem[] }[] = [
     label: 'Measure',
     items: [
       { href: '/analytics', label: 'Analytics', d: 'M4 20V10m6 10V4m6 16v-7m4 7H2' },
+      {
+        href: '/learned',
+        label: 'What we learned',
+        d: 'M12 3l8 4-8 4-8-4 8-4zm8 8l-8 4-8-4m16 4l-8 4-8-4',
+      },
       { href: '/hud', label: 'Ad HUD', d: 'M12 3v3.5M12 17.5V21M3 12h3.5M17.5 12H21M12 7.5a4.5 4.5 0 1 0 .01 0' },
     ],
   },

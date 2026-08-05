@@ -273,6 +273,72 @@ async function readPathChecks() {
       }
     }
 
+    console.log('\n== Learning loop: does it find what the data actually says? ==');
+    {
+      const { learn, bestTimeFor, MIN_POSTS, MIN_CLICKS } = await import('../src/lib/learning');
+
+      // The seed plants exactly two patterns and nothing else: reels convert
+      // about 3× plain posts, and each brand has its own peak hour. Asserting
+      // the loop *rediscovers* them is far stronger than asserting it returns
+      // a well-formed answer — a broken query can still be well-formed.
+      const l = await learn(fx.ORG.id);
+      l.sample.posts > 0 ? ok(`${l.sample.posts} posts, ${l.sample.clicks} clicks to learn from`) : bad('no history seeded');
+
+      const format = l.findings.find((f) => f.dimension === 'format');
+      format?.best.label === 'short videos' && (format.lift ?? 0) > 2
+        ? ok(`found the planted format pattern: ${format.lift!.toFixed(1)}× lift for short videos`)
+        : bad(`format finding wrong: ${format ? `${format.best.label} ${format.lift}×` : 'none'}`);
+
+      const timing = l.findings.find((f) => f.dimension === 'hour');
+      timing && (timing.lift ?? 0) > 1.5
+        ? ok(`found a real timing difference: ${timing.sentence}`)
+        : bad(`no timing finding: ${timing?.sentence ?? 'none'}`);
+
+      // Every claim has to carry the sample it rests on, or a reader cannot
+      // judge it.
+      l.findings.every((f) => f.best.posts >= MIN_POSTS && f.best.clicks >= MIN_CLICKS)
+        ? ok(`every finding clears the sample floor (${MIN_POSTS} posts, ${MIN_CLICKS} clicks)`)
+        : bad('a finding was reported from below the sample floor');
+      l.findings.every((f) => /\d/.test(f.sentence))
+        ? ok('every sentence contains the number behind it')
+        : bad('a finding stated a conclusion with no number');
+
+      // Refusing to answer is a feature. A brand with no history must get the
+      // default *and say so* rather than borrow a learned answer's authority.
+      const unknown = await bestTimeFor(fx.ORG.id, 'b-does-not-exist');
+      unknown.learned === false && unknown.reason === null
+        ? ok('a brand with no history gets a default that admits it is a default')
+        : bad(`empty brand claimed a learned time: ${JSON.stringify(unknown)}`);
+
+      // And the times have to actually be per-brand, not one answer relabelled.
+      const times = await Promise.all(
+        fx.BRANDS.map(async (b) => ({ id: b.id, ...(await bestTimeFor(fx.ORG.id, b.id)) }))
+      );
+      const learned = times.filter((t) => t.learned);
+      learned.length >= 2 ? ok(`${learned.length} brands learned from their own history`) : bad('fewer than 2 brands learned');
+      new Set(learned.map((t) => t.time)).size > 1
+        ? ok(`brands got different times (${learned.map((t) => `${t.id}:${t.time}`).join(', ')})`)
+        : bad(`every brand got the same time — likely a global default in disguise (${learned[0]?.time})`);
+      learned.every((t) => t.reason && /\d/.test(t.reason))
+        ? ok('each learned time cites its own numbers')
+        : bad('a learned time had no numeric justification');
+
+      // A performance suggestion must quote the finding verbatim. Re-describing
+      // it is how the number and the claim drift apart.
+      const { performanceSuggestions } = await import('../src/lib/suggest-performance');
+      const sugg = performanceSuggestions(l, {
+        channels: ['instagram', 'facebook', 'tiktok'],
+        ctaLabel: 'Book now', ctaUrl: 'https://example.com', coreMessage: 'Test',
+      });
+      sugg.length > 0 ? ok(`${sugg.length} performance-backed suggestions`) : bad('no performance suggestions');
+      sugg.every((s) => s.source === 'performance')
+        ? ok('all tagged as performance-sourced')
+        : bad('a suggestion claimed the wrong source');
+      format && sugg.some((s) => s.reasons.includes(format.sentence))
+        ? ok('a suggestion quotes the finding verbatim, so the number cannot drift')
+        : bad('no suggestion carries the finding’s own sentence');
+    }
+
     // Toggle is an intent to flip, not a target value; applying it twice has to
     // land back where it started or the connections screen lies.
     {
