@@ -601,6 +601,92 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
     }
   }
 
+  console.log('\n== 12. Conversions: a form post attributed to the post that caused it ==');
+  {
+    const api = await page.evaluate(() => fetch('/api/workspace').then((r) => r.json()));
+    if (api.source !== 'database') {
+      ok('no database — conversion ingestion skipped by design');
+    } else {
+      const published = api.workspace.variations.find((v) => v.status === 'published' && v.cta?.url);
+      const mint = await page.evaluate((id) =>
+        fetch('/api/links', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ variationId: id }),
+        }).then((r) => r.json()), published.id);
+
+      // Walk the real path: click the link, read what the redirect handed to
+      // the landing page, then convert with it. That is exactly what the
+      // snippet will do, so testing it this way tests the real mechanism.
+      const hop = await fetch(`http://localhost:3000/r/${mint.code}`, { redirect: 'manual' });
+      const landing = new URL(hop.headers.get('location'));
+      const clickId = landing.searchParams.get('pcp_click');
+      clickId ? ok('the redirect hands the landing page a click id') : bad('no pcp_click on the landing URL');
+
+      const before = await fetch(`http://localhost:3000/api/events?campaignId=${published.campaignId}`).then((r) => r.json());
+
+      const post = (body, origin) =>
+        fetch('http://localhost:3000/api/events', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', ...(origin ? { origin } : {}) },
+          body: JSON.stringify(body),
+        }).then(async (r) => ({ status: r.status, cors: r.headers.get('access-control-allow-origin'), body: await r.json() }));
+
+      // The acceptance test, from a different origin, as a real form would.
+      const evt = await post(
+        { kind: 'quote_request', clickId, valueCents: 45000, eventId: 'ui-test-evt-1' },
+        'https://greenscapenj.com'
+      );
+      evt.body.ok && evt.body.attributed
+        ? ok(`conversion attributed via ${evt.body.basis}`)
+        : bad(`not attributed: ${JSON.stringify(evt.body)}`);
+      evt.cors === '*' ? ok('answers cross-origin, as a site snippet needs') : bad(`no CORS header: ${evt.cors}`);
+
+      const after = await fetch(`http://localhost:3000/api/events?campaignId=${published.campaignId}`).then((r) => r.json());
+      after.total === before.total + 1
+        ? ok(`campaign total moved (${before.total} → ${after.total})`)
+        : bad(`expected ${before.total + 1}, got ${after.total}`);
+      after.byKind.quote_request >= 1 ? ok('counted under the right kind') : bad('kind not counted');
+      after.valueCents === before.valueCents + 45000
+        ? ok('value recorded in minor units')
+        : bad(`value ${before.valueCents} → ${after.valueCents}`);
+
+      // A double-submitted form is one lead, not two.
+      const dup = await post({ kind: 'quote_request', clickId, valueCents: 45000, eventId: 'ui-test-evt-1' }, 'https://greenscapenj.com');
+      const afterDup = await fetch(`http://localhost:3000/api/events?campaignId=${published.campaignId}`).then((r) => r.json());
+      dup.body.ok && afterDup.total === after.total
+        ? ok('a re-submitted form counts once')
+        : bad(`duplicate created a second conversion (${after.total} → ${afterDup.total})`);
+
+      // utm_content alone still names the post — the path that survives a
+      // cleared cookie and a copy-pasted link.
+      const viaUtm = await post({ kind: 'booking', utmContent: published.id, eventId: 'ui-test-evt-2' }, 'https://greenscapenj.com');
+      viaUtm.body.attributed
+        ? ok('utm_content alone attributes to the post')
+        : bad(`utm_content did not attribute: ${JSON.stringify(viaUtm.body)}`);
+
+      // Unattributed is accepted and reported as such — never discarded, never
+      // quietly credited to a campaign.
+      const orphan = await post({ kind: 'call', eventId: 'ui-test-evt-3' }, 'https://greenscapenj.com');
+      const all = await fetch('http://localhost:3000/api/events').then((r) => r.json());
+      orphan.body.ok && orphan.body.attributed === false && all.unattributed >= 1
+        ? ok(`an unattributed conversion is kept and counted separately (${all.attributed} attributed, ${all.unattributed} not)`)
+        : bad(`unattributed handling wrong: ${JSON.stringify(orphan.body)}`);
+
+      // Bad input is refused rather than stored as something meaningless.
+      const junk = await post({ kind: 'not_a_kind', eventId: 'ui-test-evt-4' }, 'https://greenscapenj.com');
+      junk.status === 400 ? ok('an unknown kind is rejected') : bad(`unknown kind gave ${junk.status}`);
+
+      // Preflight has to succeed or the browser never sends the POST at all.
+      const pre = await fetch('http://localhost:3000/api/events', {
+        method: 'OPTIONS',
+        headers: { origin: 'https://greenscapenj.com', 'access-control-request-method': 'POST' },
+      });
+      pre.status === 204 && pre.headers.get('access-control-allow-methods')?.includes('POST')
+        ? ok('CORS preflight answered')
+        : bad(`preflight gave ${pre.status}`);
+    }
+  }
+
   console.log('\n' + (errors.length ? 'PAGE ERRORS:\n' + errors.join('\n') : 'no page errors'));
   console.log(fail.length ? `\n${fail.length} FAILURE(S)` : '\nALL CHECKS PASSED');
   await browser.close();

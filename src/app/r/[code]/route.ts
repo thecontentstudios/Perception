@@ -10,10 +10,12 @@ export const dynamic = 'force-dynamic';
  * The redirector. Somebody tapped a link in a post; this runs before they see
  * anything, so it has exactly one job and a very short deadline.
  *
- * Order matters. **Redirect first, record second** — a slow or failing
- * database must never leave a real person staring at a blank tab. Everything
- * that could go wrong is caught, and a click we failed to record is a number
- * we lose, not a visitor.
+ * The click write has to happen *before* the redirect, because the click id
+ * travels in the destination URL — a cookie set here is not sent from the
+ * customer's own domain later, so the URL is the only carrier that survives
+ * (see `src/lib/attribution.ts`). But it must never be able to *block* the
+ * redirect: the write is wrapped, and a failure costs us a number rather than
+ * costing the customer a visitor.
  *
  * The cookie is first-party and holds an opaque id we generated. No
  * fingerprinting, no third-party pixel, nothing that follows anyone off this
@@ -41,11 +43,35 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
   const returning = Boolean(cookies[VISITOR_COOKIE]);
   const visitorId = cookies[VISITOR_COOKIE] || newVisitorId();
 
+  // Record the click *before* redirecting in this one respect: the click id
+  // has to travel in the URL, because the conversion happens on the customer's
+  // domain where our cookie will not be sent. See src/lib/attribution.ts.
+  let clickId: string | null = null;
+  try {
+    const repeat =
+      returning && (await db.linkClick.count({ where: { linkId: link.id, visitorId } })) > 0;
+    const click = await db.linkClick.create({
+      data: {
+        linkId: link.id,
+        visitorId,
+        repeat,
+        referrer: req.headers.get('referer'),
+        userAgent: req.headers.get('user-agent')?.slice(0, 255),
+      },
+    });
+    clickId = click.id;
+  } catch {
+    // Losing a click costs us a number. Blocking the redirect on it would cost
+    // the customer a visitor, which is worse by a wide margin — so the
+    // redirect goes out either way, just without attribution.
+  }
+
   const destination = withUtms(link.targetUrl, {
     campaign: link.campaign.utmCode,
     source: link.variation.channel.toLowerCase(),
     medium: 'social',
     content: link.variation.id,
+    click: clickId,
   });
 
   const res = NextResponse.redirect(destination, 302);
@@ -57,27 +83,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ code: st
   // business can actually reason about.
   res.cookies.set(
     ATTRIBUTION_COOKIE,
-    JSON.stringify({ l: link.id, v: link.variationId, c: link.campaignId, t: Date.now() }),
+    JSON.stringify({ l: clickId, v: link.variationId, c: link.campaignId, t: Date.now() }),
     { maxAge: ATTRIBUTION_MAX_AGE, httpOnly: true, sameSite: 'lax', path: '/' }
   );
-
-  try {
-    const repeat =
-      returning &&
-      (await db.linkClick.count({ where: { linkId: link.id, visitorId } })) > 0;
-    await db.linkClick.create({
-      data: {
-        linkId: link.id,
-        visitorId,
-        repeat,
-        referrer: req.headers.get('referer'),
-        userAgent: req.headers.get('user-agent')?.slice(0, 255),
-      },
-    });
-  } catch {
-    // Losing a click is a reporting gap. Blocking the redirect on it would be
-    // a broken link, which is worse by a wide margin.
-  }
 
   return res;
 }

@@ -72,7 +72,12 @@ export async function linkFor(variation: {
  */
 export function withUtms(
   targetUrl: string,
-  utm: { campaign: string; source: string; medium: string; content?: string }
+  utm: {
+    campaign: string; source: string; medium: string; content?: string;
+    /** The click id, which is how attribution survives to the customer's own
+        domain without a cross-site cookie. */
+    click?: string | null;
+  }
 ): string {
   let url: URL;
   try {
@@ -87,6 +92,9 @@ export function withUtms(
   set('utm_source', utm.source);
   set('utm_medium', utm.medium);
   set('utm_content', utm.content);
+  // Our own parameter, not a UTM: analytics tools ignore it and the snippet
+  // reads it. Named distinctly so it is obvious it isn't part of the standard.
+  if (utm.click) set('pcp_click', utm.click);
   return url.toString();
 }
 

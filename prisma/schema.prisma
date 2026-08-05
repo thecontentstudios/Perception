@@ -36,6 +36,7 @@ model Organization {
   contacts    Contact[]
   segments    AudienceSegment[]
   auditEvents AuditEvent[]
+  conversions Conversion[]
 }
 
 model Brand {
@@ -283,6 +284,7 @@ model ChannelVariation {
   published PublishedPost?
   metrics   Metric[]
   trackedLink TrackedLink?
+  conversions Conversion[]
 
   @@index([contentItemId])
   @@index([channel, status, scheduledAt])
@@ -552,14 +554,26 @@ model LinkClick {
   /// mistaken for a second person.
   repeat    Boolean    @default(false)
 
+  conversions Conversion[]
+
   @@index([linkId, clickedAt])
   @@index([visitorId])
 }
 
 model Conversion {
-  id         String   @id @default(cuid())
-  campaignId String
-  campaign   Campaign @relation(fields: [campaignId], references: [id])
+  id             String   @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  /// Nullable on purpose. An unattributed quote request is still a real quote
+  /// request, and dropping it would make the totals quietly wrong — "8 leads"
+  /// when the owner counted 12. Reporting says how many we could trace.
+  campaignId String?
+  campaign   Campaign? @relation(fields: [campaignId], references: [id])
+  /// Which post, when we know. This is what Phase 3 learns from.
+  variationId String?
+  variation   ChannelVariation? @relation(fields: [variationId], references: [id])
+  clickId    String?
+  click      LinkClick? @relation(fields: [clickId], references: [id])
   contactId  String?
   contact    Contact? @relation(fields: [contactId], references: [id])
   // form_submission | booking | trial_signup | purchase | call | quote_request
@@ -567,10 +581,14 @@ model Conversion {
   channel    Channel?
   valueCents Int      @default(0)
   occurredAt DateTime @default(now())
+  /// Caller-supplied id, used to make a double-submitted form count once.
+  externalId String?
   // utm payload / referrer captured by the tracking snippet
   attribution Json?
 
+  @@unique([organizationId, externalId])
   @@index([campaignId, kind, occurredAt])
+  @@index([variationId])
 }
 
 // ---------------------------------------------------------------------------

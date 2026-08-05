@@ -361,3 +361,49 @@ here came from one of our posts.
 Ten checks cover it: minting is idempotent, the redirect is a 302 to the right
 page, UTMs name the post, the attribution cookie is set, clicks land, repeat
 visitors aren't double-counted, and an unknown code recovers.
+
+### Phase 2.2 — Conversion ingestion ✅
+
+`POST /api/events` accepts the six conversion kinds, attributes them, and
+writes a `Conversion` row. The sentence this product exists to say — "this
+campaign generated N quote requests" — is now counted rather than written.
+
+**The cookie is not the primary attribution path, and that turned out to be
+the whole design.** `/r/<code>` sets a first-party cookie on *our* domain. The
+conversion happens on the *customer's* domain. A cookie set on ours is not
+sent with a cross-site request from theirs unless it is `SameSite=None;
+Secure` — exactly the third-party-cookie pattern browsers are removing and
+Safari already blocks. Building on it would work in Chrome today and quietly
+report zeros for a large share of real visitors.
+
+So the redirect carries attribution **in the URL** (`pcp_click`, plus
+`utm_content` naming the variation). The snippet reads it off the landing page,
+keeps it in the customer's *own* first-party storage, and returns it with the
+conversion. Nothing cross-site is needed and nothing breaks when third-party
+cookies finally go. The cookie stays as a same-site fallback, free to keep.
+
+**Attribution resolves best-evidence-first, and says which one won.** A click
+id (one visitor, one post, one moment) beats `utm_content` (survives a cleared
+cookie, but a shared link credits the original post) beats `utm_campaign`
+(names the campaign, not the post — enough for "did this work", not enough for
+Phase 3 to learn from). The `basis` is stored, so reporting can be honest about
+its own confidence.
+
+**Unattributed conversions are kept.** `campaignId` became nullable for this:
+an untraceable quote request is still a real quote request, and dropping it
+makes the totals quietly wrong — "8 leads" when the owner counted 12. The
+endpoint reports attributed and unattributed separately, always.
+
+**What authorizes the write.** The endpoint answers any origin, because a
+customer's form can live on any subdomain and origin-locking breaks them while
+stopping no one. The write is authorized by the click id instead: unguessable,
+single-visitor, expiring. What an unauthenticated caller can do is add an
+*unattributed* conversion — which inflates a total that is displayed
+separately, so an inflated one is visible rather than believed.
+
+A caller-supplied `eventId` makes a double-submitted form count once, enforced
+by a unique index rather than a best-effort check.
+
+Eleven checks walk the real path: click the link, read what the redirect handed
+the landing page, convert with it from a different origin, and confirm the
+campaign total moved.
