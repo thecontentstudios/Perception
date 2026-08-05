@@ -105,6 +105,10 @@ npm run db:seed         # load the demo workspace as real rows
 redis-server --port 6379 --daemonize yes
 echo 'REDIS_URL="redis://127.0.0.1:6379"' >> .env
 
+# 2b. ffmpeg, for video trimming and reframing. Images need nothing extra —
+#     sharp ships its own binaries.
+sudo apt-get install -y ffmpeg      # or: brew install ffmpeg
+
 # 3. Two processes
 npm run dev             # the app
 npm run worker          # scheduled posts, in its own terminal
@@ -148,11 +152,12 @@ repeatedly without cleanup.
 | `npm run db:migrate` | Apply Prisma migrations |
 | `npm run db:seed` | Load the demo workspace into Postgres |
 | `npm run test:unit` | Facet byte offsets, grapheme counting, token crypto, PKCE, read/write path |
+| `npm run test:media` | Upload, EXIF stripping, crops, video trimming (needs sharp + ffmpeg) |
 | `npm run test:worker` | Schedules a post, runs the worker, checks it published (needs `node scripts/mock-mastodon.js`) |
 | `node scripts/mock-mastodon.js` | Stand-in Mastodon instance for the worker suite |
 | `node scripts/mock-site.js` | Stand-in customer website, for testing the tracking snippet |
 | `npm run test:ui` | Browser suite: nav, panels, drag-drop, discovery, fan-out, live connections (needs the server running) |
-| `npm test` | All three suites |
+| `npm test` | All four suites |
 
 Every suite that needs infrastructure **skips with a note rather than failing**
 when it isn't there, so `npm test` stays green on a fresh clone.

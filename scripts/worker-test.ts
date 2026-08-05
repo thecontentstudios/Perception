@@ -79,10 +79,34 @@ async function main() {
   const item = await db.contentItem.findFirst({ where: { campaign: { status: 'ACTIVE' } } });
   if (!item) return bad('no content item to attach a test post to');
 
-  const dueAt = new Date(Date.now() + 5_000);
   await db.publicationAttempt.deleteMany({ where: { variationId: TEST_ID } });
   await db.publishedPost.deleteMany({ where: { variationId: TEST_ID } });
   await db.channelVariation.deleteMany({ where: { id: TEST_ID } });
+
+  const before = await fetch(`http://${HOST}/__posts`).then((r) => r.json());
+
+  // Start the worker exactly as an operator would.
+  const worker = spawn('npx', ['tsx', 'worker.ts'], {
+    env: { ...process.env, SCAN_INTERVAL_MS: '2000' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const lines: string[] = [];
+  let up = false;
+  worker.stdout.on('data', (d) => {
+    const t = String(d).trim();
+    lines.push(t);
+    if (t.includes('worker up')) up = true;
+  });
+  worker.stderr.on('data', (d) => lines.push('ERR ' + String(d).trim()));
+
+  // Wait for the worker to actually be listening before scheduling anything.
+  // `npx tsx` cold-starts in seconds, and counting that against the publish
+  // window made this test fail intermittently under load — a flaky test is
+  // worse than no test, because it teaches you to re-run instead of read.
+  for (let i = 0; i < 60 && !up; i++) await sleep(500);
+  up ? ok('worker started') : bad(`worker never came up: ${lines.join(' | ')}`);
+
+  const dueAt = new Date(Date.now() + 3_000);
   await db.channelVariation.create({
     data: {
       id: TEST_ID, contentItemId: item.id, channel: 'MASTODON', format: 'update',
@@ -93,17 +117,6 @@ async function main() {
   });
   // Drop any queued job from an earlier run so this is a clean fire.
   await publishQueue().remove(slotKey(TEST_ID, dueAt)).catch(() => {});
-
-  const before = await fetch(`http://${HOST}/__posts`).then((r) => r.json());
-
-  // Start the worker exactly as an operator would.
-  const worker = spawn('npx', ['tsx', 'worker.ts'], {
-    env: { ...process.env, SCAN_INTERVAL_MS: '2000' },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  const lines: string[] = [];
-  worker.stdout.on('data', (d) => lines.push(String(d).trim()));
-  worker.stderr.on('data', (d) => lines.push('ERR ' + String(d).trim()));
 
   // Wait for the post to go out, checking as we go rather than sleeping blind.
   let published = null;

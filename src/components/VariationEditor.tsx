@@ -1,7 +1,9 @@
 'use client';
 
-import { useEffect } from 'react';
-import { useApp } from '@/lib/store';
+import { useEffect, useState } from 'react';
+import { TODAY, useApp } from '@/lib/store';
+import { adapterFor } from '@/lib/connectors/registry';
+import { remediate, type RemediableWarning } from '@/lib/remediate';
 import { CHANNEL_META } from '@/lib/channels';
 import { dateKeyOf, fmtDateTime, timeOf } from '@/lib/dates';
 import { useResizable } from '@/lib/use-ui';
@@ -37,13 +39,71 @@ export function VariationEditor({ variationId, onClose }: { variationId: string;
 
   const v = state.variations.find((x) => x.id === variationId);
   if (!v) return null;
+  const [fixing, setFixing] = useState<string | null>(null);
+  const [fixNote, setFixNote] = useState<string | null>(null);
   const campaign = campaignById(v.campaignId);
   const brand = campaign ? brandById(campaign.brandId) : undefined;
   const item = itemById(v.contentItemId);
   if (!campaign || !brand) return null;
 
-  const warnings = preflightFor(v);
-  const blocked = warnings.some((w) => w.severity === 'block');
+  const rawWarnings = preflightFor(v);
+  const blocked = rawWarnings.some((w) => w.severity === 'block');
+
+  /**
+   * Attach a fix to each warning that has one. The capability sheet supplies
+   * the limits, so the offered fix always targets *this* destination's rules
+   * rather than a generic guess.
+   */
+  const caps = adapterFor(v.channel).capabilities;
+  const warnings = remediate(rawWarnings, {
+    variation: v,
+    assets: assetsFor(v),
+    caps: {
+      maxChars: caps.maxChars,
+      maxHashtags: caps.maxHashtags,
+      maxVideoSec: caps.maxVideoSec,
+      allowedRatios: caps.allowedRatios,
+    },
+    campaignCta: campaign.cta,
+    today: TODAY,
+  });
+
+  /**
+   * Apply a fix. Optimistic like every other mutation, then reconciled — but
+   * media fixes come back with a new asset id the client cannot predict, so
+   * those reload the workspace rather than guessing.
+   */
+  const applyFix = async (w: RemediableWarning) => {
+    if (!w.remedy) return;
+    setFixing(w.id);
+    setFixNote(null);
+    try {
+      const res = await fetch('/api/remediate', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          kind: w.remedy.kind,
+          variationId: v.id,
+          assetId: w.remedy.assetId,
+          params: w.remedy.params,
+        }),
+      });
+      const d = await res.json();
+      if (!d.ok) {
+        setFixNote(d.reason);
+        return;
+      }
+      // Pull the workspace back rather than patching locally: a crop creates a
+      // row, and a client-side guess at its id would be wrong.
+      const w2 = await fetch('/api/workspace').then((r) => r.json());
+      if (w2.source === 'database') dispatch({ type: 'hydrate', workspace: w2.workspace });
+      setFixNote(null);
+    } catch (e) {
+      setFixNote((e as Error).message);
+    } finally {
+      setFixing(null);
+    }
+  };
   const patch = (p: Partial<ChannelVariation>) => dispatch({ type: 'updateVariation', variationId: v.id, patch: p });
 
   const dateVal = v.scheduledAt ? dateKeyOf(v.scheduledAt) : '';
@@ -78,7 +138,12 @@ export function VariationEditor({ variationId, onClose }: { variationId: string;
           <PlatformPreview variation={v} assets={assetsFor(v)} brand={brand} />
 
           <div className="section-label">Checks before publishing</div>
-          <WarningsList warnings={warnings} />
+          <WarningsList warnings={warnings} onFix={applyFix} busy={fixing} />
+          {fixNote && (
+            <div className="warning-row block" role="alert">
+              <div><strong>Could not apply that fix.</strong> {fixNote}</div>
+            </div>
+          )}
 
           <div className="section-label">Edit this version</div>
           {v.channel === 'email' && (

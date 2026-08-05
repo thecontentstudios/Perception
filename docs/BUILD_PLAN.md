@@ -533,3 +533,82 @@ asserts the suggestion's `reasons[]` contains the finding's own sentence.
 `/learned` is written for someone who does not work in marketing: it states its
 sample before any conclusion, every claim carries the posts and clicks behind
 it, and the suite fails on marketing jargon.
+
+---
+
+## Phase 4 — Remediation ✅ (4.1–4.4)
+
+Preflight stops being only a critic. Where a fix is mechanical, the product
+does it.
+
+### 4.1 — Real upload
+
+`POST /api/media` takes a multipart file, runs it through sharp, and writes it
+to content-addressed storage. `src/lib/storage.ts` is an interface with a local
+driver; production swaps in S3 and nothing upstream changes. Keys are
+`sha256(bytes)`, so the same photo uploaded twice costs one object and a key
+never leaks a filename into a URL.
+
+**EXIF is stripped, and the reason is not tidiness.** A phone photo carries the
+GPS coordinates of where it was taken. A landscaper posting a finished job
+would publish their customer's home address, in a field nobody looks at, to
+every platform at once.
+
+**The subtlety that bites:** EXIF also carries *orientation*. Strip it naively
+and every portrait photo comes out sideways, because the pixels were never
+rotated — the tag was doing the work. `.rotate()` applies the tag before it is
+discarded. The test proves this the only way that means anything: it builds a
+400×200 fixture with orientation 6 and asserts the stored file is **200×400**.
+
+### 4.2 — Renditions
+
+One upload, every shape. `cropImage` uses sharp's `attention` strategy rather
+than a centre crop — on a photo of a house with sky above it, that is the
+difference between a usable square and a square of sky. Video reframing and
+trimming go through ffmpeg, re-encoding rather than stream-copying because a
+stream copy cuts at the nearest keyframe and can leave a black opening frame.
+
+**A rendition never replaces the original.** Cropping throws away part of the
+picture, and the original is often the only copy the owner has.
+
+### 4.3 — "Fix it for me"
+
+Three tests before a warning gets a button:
+
+1. **Is it mechanical?** Trimming to 90 seconds is arithmetic. Writing alt text
+   is a description of something we cannot see.
+2. **Is it reversible?** Renditions are new objects. Anything that would
+   overwrite the owner's work is not a fix.
+3. **Can we say exactly what it will do, first?** "Trim to 90s, dropping the
+   last 28 seconds" is a decision the owner can make. "Fix it" is not.
+
+`missing-alt`, `not-connected`, `needs-reconnect` and `promo-density` fail one
+of those and keep their written instruction instead. A button that does
+something surprising is worse than a warning that does nothing.
+
+The end-to-end test is the acceptance criterion, literally: an 8-second video
+on a real Reels post, trimmed to 3 through the same route the button calls,
+with the duration **read back out of the file**. It then checks the original
+row, the original bytes, and the alt text all survived, and that an audit row
+says so.
+
+### 4.4 — Alt text
+
+Suggested, never assumed. Nothing in this file can see the picture; what it can
+do is turn a filename into a starting sentence the owner edits in two seconds
+instead of facing a blank box. It returns a **draft with a confidence** and a
+note admitting it never looked at the image, and `IMG_4821.jpg` produces *no
+suggestion at all* rather than an invented one — a wrong description is worse
+than none, because a screen-reader user has no way to tell it is wrong.
+
+### What the tests caught
+
+**An uploaded file could vanish.** The media library groups strictly by
+business, and an upload made while "All businesses" was selected had no brand —
+so the row existed, the count grew, and the owner could never find or use it.
+There is now an "Not assigned to a business yet" group.
+
+**Test data accumulated again.** Each browser run left one uploaded asset
+behind; the same cleanup that clears test conversions now clears unused test
+uploads, and only when nothing references them — the same check a real delete
+needs.

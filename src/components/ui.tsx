@@ -3,6 +3,7 @@
 import { CAMPAIGN_COLORS } from '@/lib/demo-data';
 import { USERS } from '@/lib/store';
 import type { MediaAsset, PreflightWarning, VariationStatus, WarningSeverity } from '@/lib/types';
+import type { RemediableWarning } from '@/lib/remediate';
 
 export const STATUS_LABEL: Record<VariationStatus, string> = {
   idea: 'Idea',
@@ -50,7 +51,24 @@ export function SevIcon({ severity, size = 14 }: { severity: WarningSeverity; si
   );
 }
 
-export function WarningsList({ warnings }: { warnings: PreflightWarning[] }) {
+/**
+ * Warnings, each with its fix attached when it has one.
+ *
+ * The button only appears for the fixes that are mechanical, reversible, and
+ * describable in advance — `remediate.ts` makes that call. Everything else
+ * keeps its written instruction, because a button that does something the
+ * owner did not expect is worse than a warning that does nothing.
+ */
+export function WarningsList({
+  warnings,
+  onFix,
+  busy,
+}: {
+  warnings: RemediableWarning[] | PreflightWarning[];
+  /** Omitted where fixes aren't wired up; the buttons simply don't render. */
+  onFix?: (w: RemediableWarning) => void;
+  busy?: string | null;
+}) {
   if (warnings.length === 0) {
     return (
       <div className="notice success">
@@ -60,17 +78,36 @@ export function WarningsList({ warnings }: { warnings: PreflightWarning[] }) {
   }
   return (
     <div className="warnings">
-      {warnings.map((w) => (
-        <div key={w.id} className={`warning-row ${w.severity}`}>
-          <span className="w-icon">
-            <SevIcon severity={w.severity} />
-          </span>
-          <div>
-            <div style={{ fontWeight: 600 }}>{w.message}</div>
-            {w.fix && <div className="fix">{w.fix}</div>}
+      {warnings.map((w) => {
+        const remedy = 'remedy' in w ? w.remedy : null;
+        return (
+          <div key={w.id} className={`warning-row ${w.severity}`}>
+            <span className="w-icon">
+              <SevIcon severity={w.severity} />
+            </span>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontWeight: 600 }}>{w.message}</div>
+              {/* When there is a fix, its explanation replaces the generic
+                  instruction — "keeps the first 90 seconds and drops the last
+                  28" is more use than "trim the video". */}
+              <div className="fix">{remedy ? remedy.explains : w.fix}</div>
+              {remedy?.cost && (
+                <div className="fix" style={{ color: 'var(--st-serious)' }}>{remedy.cost}</div>
+              )}
+              {remedy && onFix && (
+                <button
+                  className="btn sm primary"
+                  style={{ marginTop: 6 }}
+                  disabled={busy === w.id}
+                  onClick={() => onFix(w as RemediableWarning)}
+                >
+                  {busy === w.id ? 'Working…' : remedy.label}
+                </button>
+              )}
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

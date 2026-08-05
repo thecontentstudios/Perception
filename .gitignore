@@ -30,3 +30,6 @@ yarn-error.log*
 
 # local dev database env (DATABASE_URL points at a throwaway instance)
 /.env
+
+# Uploaded media (local storage driver)
+/.media/

@@ -165,6 +165,16 @@ async function readPathChecks() {
     },
   });
 
+  // Likewise the photo the browser suite uploads each run. Content-addressed
+  // storage means the bytes are shared, so only the row needs clearing — and
+  // only when nothing is using it, which is the same check a real delete needs.
+  const testUploads = await db.mediaAsset.findMany({
+    where: { fileName: 'fall-cleanup-crew.png' },
+    select: { id: true, _count: { select: { usages: true } } },
+  });
+  const unused = testUploads.filter((m) => m._count.usages === 0).map((m) => m.id);
+  if (unused.length > 0) await db.mediaAsset.deleteMany({ where: { id: { in: unused } } });
+
   try {
     const w = await loadWorkspace(fx.ORG.id);
 

@@ -906,6 +906,61 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
     }
   }
 
+  console.log('\n== 16. Upload a photo through the browser ==');
+  {
+    const api = await page.evaluate(() => fetch('/api/workspace').then((r) => r.json()));
+    if (api.source !== 'database') {
+      ok('no database — upload skipped by design');
+    } else {
+      await page.goto('http://localhost:3000/media', { waitUntil: 'networkidle' });
+      await page.waitForTimeout(700);
+      // Expand everything first: assets live inside per-business collapsibles,
+      // and a closed group renders nothing to count.
+      const expandAll = await page.$('button:has-text("Expand all")');
+      if (expandAll) { await expandAll.click(); await page.waitForTimeout(600); }
+      const countAssets = () => page.$$eval('.grid.cols-4 > .card', (e) => e.length);
+      const before = await countAssets();
+
+      // A real 1x1 PNG through a real file input — the same path a customer's
+      // photo takes.
+      const png = Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+        'base64'
+      );
+      const input = await page.$('input[type="file"]');
+      if (!input) {
+        bad('no file input on the media page');
+      } else {
+        await input.setInputFiles({ name: 'fall-cleanup-crew.png', mimeType: 'image/png', buffer: png });
+        await page.waitForTimeout(2500);
+
+        const note = await page.$eval('[role="status"], .warning-row', (e) => e.innerText).catch(() => '');
+        /Uploaded/i.test(note) ? ok(`upload confirmed on screen ("${note.slice(0, 45)}…")`) : bad(`no upload confirmation: "${note.slice(0, 60)}"`);
+        /[Ll]ocation data/.test(note)
+          ? ok('the page says location data was removed')
+          : bad('no mention of stripped location data');
+
+        const expand2 = await page.$('button:has-text("Expand all")');
+        if (expand2) { await expand2.click(); await page.waitForTimeout(600); }
+        const after = await countAssets();
+        after > before
+          ? ok(`the uploaded file is visible in the library (${before} → ${after})`)
+          : bad(`uploaded but not visible (${before} → ${after}) — an asset the owner cannot find`);
+
+        // The stored object has to actually be servable.
+        const w = await page.evaluate(() => fetch('/api/workspace').then((r) => r.json()));
+        const added = w.workspace.media.find((m) => m.name === 'fall-cleanup-crew.png');
+        added ? ok('the asset is in the workspace') : bad('uploaded asset missing from the workspace');
+
+        // Path traversal must not get anywhere.
+        const evil = await fetch('http://localhost:3000/api/media/file/..%2f..%2f..%2fetc%2fpasswd');
+        evil.status === 404 ? ok('a traversal attempt 404s') : bad(`traversal returned ${evil.status}`);
+        const wrongShape = await fetch('http://localhost:3000/api/media/file/aa/bb/notahash.jpg');
+        wrongShape.status === 404 ? ok('a malformed key 404s') : bad(`malformed key returned ${wrongShape.status}`);
+      }
+    }
+  }
+
   console.log('\n' + (errors.length ? 'PAGE ERRORS:\n' + errors.join('\n') : 'no page errors'));
   console.log(fail.length ? `\n${fail.length} FAILURE(S)` : '\nALL CHECKS PASSED');
   await browser.close();
