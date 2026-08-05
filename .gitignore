@@ -27,3 +27,6 @@ yarn-error.log*
 
 # locally stored OAuth grants (encrypted, but never commit them)
 /.tokens/
+
+# local dev database env (DATABASE_URL points at a throwaway instance)
+/.env

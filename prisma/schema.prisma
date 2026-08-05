@@ -48,10 +48,11 @@ model Brand {
   colorIndex     Int      @default(0)
   createdAt      DateTime @default(now())
 
-  locations Location[]
-  campaigns Campaign[]
-  media     MediaAsset[]
-  contacts  Contact[]
+  locations    Location[]
+  campaigns    Campaign[]
+  media        MediaAsset[]
+  contacts     Contact[]
+  destinations PublishDestination[]
 
   @@index([organizationId])
 }
@@ -112,6 +113,15 @@ enum Channel {
   TIKTOK
   YOUTUBE
   GOOGLE_BUSINESS
+  X
+  THREADS
+  BLUESKY
+  MASTODON
+  PINTEREST
+  REDDIT
+  NEXTDOOR
+  SNAPCHAT
+  WHATSAPP
   EMAIL
   SMS
   WEBSITE
@@ -121,7 +131,7 @@ enum ConnectionStatus {
   CONNECTED
   NEEDS_RECONNECT
   EXPIRING
-  DISCONNECTED
+  NOT_CONNECTED
 }
 
 model ConnectedAccount {
@@ -140,9 +150,35 @@ model ConnectedAccount {
   lastSyncAt     DateTime?
   connectedById  String?
 
-  variations ChannelVariation[]
+  variations   ChannelVariation[]
+  destinations PublishDestination[]
 
   @@index([organizationId, channel])
+}
+
+/// A place a post can actually land: one Page, professional account,
+/// location, company page, or board. One ConnectedAccount yields many.
+model PublishDestination {
+  id          String           @id @default(cuid())
+  accountId   String
+  account     ConnectedAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  channel     Channel
+  name        String
+  kind        String
+  /// The platform's own identifier, used for publishing and dedup.
+  externalId  String
+  brandId     String?
+  brand       Brand?           @relation(fields: [brandId], references: [id])
+  enabled     Boolean          @default(false)
+  followers   Int?
+  /// Destination-scoped problems: a missing role, an unverified location.
+  issues      String[]
+  hue         Int              @default(0)
+
+  variations ChannelVariation[]
+
+  @@unique([accountId, externalId])
+  @@index([brandId, channel])
 }
 
 // ---------------------------------------------------------------------------
@@ -215,6 +251,10 @@ model ChannelVariation {
   contentItem   ContentItem     @relation(fields: [contentItemId], references: [id])
   accountId     String?
   account       ConnectedAccount? @relation(fields: [accountId], references: [id])
+  /// The specific place this publishes to. Null falls back to the brand's
+  /// default for the channel, and preflight surfaces that.
+  destinationId String?
+  destination   PublishDestination? @relation(fields: [destinationId], references: [id])
   channel       Channel
   format        String
   status        VariationStatus @default(DRAFT)

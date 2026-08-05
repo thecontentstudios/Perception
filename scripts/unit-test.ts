@@ -6,6 +6,7 @@
 import { buildFacets, graphemeLength } from '../src/lib/publishers/bluesky';
 import { encrypt, decrypt, pkceChallenge, safeEqual } from '../src/lib/oauth/crypto';
 import { mastodonPublisher } from '../src/lib/publishers/mastodon';
+import { readFileSync } from 'node:fs';
 
 let failures = 0;
 const ok = (m: string) => console.log('  PASS ' + m);
@@ -45,6 +46,40 @@ console.log('\n== Facet byte offsets (UTF-8 bytes, not string indices) ==');
 {
   const f = buildFacets('no links or tags here');
   eq(f.length, 0, 'plain text yields no facets');
+}
+
+console.log('\n== Schema matches the domain (drift guard) ==');
+{
+  // Both of these drifted silently and only surfaced when the database was
+  // first used: nine channels and one connection status were missing from the
+  // Prisma enums. Cheap to assert, expensive to discover at runtime.
+  const schema = readFileSync('prisma/schema.prisma', 'utf8');
+  const types = readFileSync('src/lib/types.ts', 'utf8');
+
+  const prismaEnum = (name: string): string[] => {
+    const block = schema.match(new RegExp(`enum ${name} \\{([^}]*)\\}`))?.[1] ?? '';
+    return block.split('\n').map((l) => l.trim()).filter((l) => /^[A-Z_]+$/.test(l)).sort();
+  };
+  const domainUnion = (name: string): string[] => {
+    const block = types.match(new RegExp(`export type ${name} =([\\s\\S]*?);`))?.[1] ?? '';
+    return [...block.matchAll(/'([a-z_]+)'/g)].map((m) => m[1].toUpperCase()).sort();
+  };
+
+  for (const [enumName, typeName] of [
+    ['Channel', 'Channel'],
+    ['ConnectionStatus', 'ConnectionStatus'],
+    ['VariationStatus', 'VariationStatus'],
+    ['CampaignStatus', 'CampaignStatus'],
+  ] as [string, string][]) {
+    const a = prismaEnum(enumName);
+    const b = domainUnion(typeName);
+    if (b.length === 0) { bad(`${typeName}: domain union not found`); continue; }
+    const onlyDb = a.filter((x) => !b.includes(x));
+    const onlyDomain = b.filter((x) => !a.includes(x));
+    onlyDb.length === 0 && onlyDomain.length === 0
+      ? ok(`${enumName}: schema and domain agree (${a.length} values)`)
+      : bad(`${enumName} drift — only in schema: [${onlyDb}], only in domain: [${onlyDomain}]`);
+  }
 }
 
 console.log('\n== Mastodon counts text its own way ==');
