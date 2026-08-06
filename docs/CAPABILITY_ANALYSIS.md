@@ -1,183 +1,252 @@
-# What Perception still needs — a capability analysis
+# What Perception can actually do — a capability analysis
 
-Written after surveying the actual codebase, not from memory of it.
+*Rewritten 2026-08-06, after Phases 1–6. Supersedes the survey of 2026-08-05,
+which described a product with no database, no worker and no attribution —
+all three of which now exist. Grounded in the codebase, not in memory of it.*
 
 ## The diagnosis in one line
 
-**Perception has an excellent domain model and almost no runtime.**
+**Perception now decides far better than it acts.**
+
+The last analysis found a rich domain model with no runtime. That has been
+fixed: there is a database, a worker that fires scheduled posts, real
+attribution, a learning loop, authentication, and a cost model that is careful
+to the cent. What has not kept pace is the part that touches the outside world.
 
 | Layer | Size | State |
 |---|---|---|
-| Domain model, UI, engines (`src/lib`, `src/components`, `src/app`) | ~12,500 lines | Rich and correct |
-| Server surface (`src/app/api`) | 619 lines | OAuth + two publishers |
-| Database access | **0 files** | `prisma/schema.prisma` is written and unused |
-| Scheduler / worker | **does not exist** | Only comments describing one |
-| Tracked links / conversion ingestion | **does not exist** | `utmCode` appears 11 times and produces nothing |
+| Domain model + engines (`src/lib`) | ~11,800 lines | Rich, tested, honest |
+| Screens (`src/app/**/page.tsx`) | ~6,200 lines | Complete |
+| Server surface (`src/app/api`) | ~2,500 lines | Real, authenticated, tenant-scoped |
+| Worker + queue | ~420 lines | Real; fires scheduled posts |
+| Tests | ~3,200 lines | 487 checks, five suites |
+| **Channels that can actually publish** | **2 of 18** | Bluesky, Mastodon |
+| **Channels that can actually send** | **0 of 2** | Email and SMS write rows and stop |
+| **Ad platforms that can actually buy** | **0 of 11** | Priced, planned, never purchased |
 
-Everything a user sees is right. Almost nothing survives a refresh or happens
-on its own.
+## Verified: what is genuinely real
 
-## The three promises, each half-built
+Each of these was checked against the code, not assumed.
 
-The product makes three promises. Every one is convincing in the UI and
-incomplete underneath. This is the clearest way to prioritise.
+- **Persistence.** Prisma + Postgres, migrations, a seeded workspace of 1,285
+  contacts. Reads and writes both go through it.
+- **The write path.** Optimistic reducer, persistence sidecar, ordered writes,
+  tenant scoping on every mutation.
+- **The worker.** Claims scheduled variations by compare-and-swap, publishes,
+  records attempts, and reclaims after a staleness timeout.
+- **Attribution.** `trackedLink.create`, `linkClick.create` and
+  `conversion.create` all run at runtime, driven by `/r/<code>` and
+  `/api/events`. A click on a real link on a real page produces a real row.
+- **The learning loop.** Computes over those real rows, with sample floors and
+  a refusal to claim a pattern it cannot support.
+- **Auth and tenancy.** Sessions, scrypt, capability gates, 404-not-403, CSP
+  with a per-request nonce, rate limits sized against real traffic.
+- **The cost model.** Segment counting, free-allowance depletion, fixed costs,
+  three cost shapes never averaged, budgets with a hard stop that refuses.
 
-### 1. "One campaign, everywhere your customers are"
+## Verified: what is hollow
 
-Built: the composer, the campaign/content-item/variation split, destination
-fan-out, per-destination preflight, two real publishers.
+### 1. `/api/send` does not send anything
 
-**Missing: scheduled posts never fire.** Quick Post's "Schedule" writes a
-variation with `status: 'scheduled'` and the calendar draws it. Nothing
-publishes it at 9:30am, because there is no process that wakes up. A campaign
-operating system that cannot fire a scheduled post is not yet the product.
+It computes the audience, prices it correctly, writes `EmailDelivery` or
+`SmsDelivery` rows at `QUEUED`, writes `SpendEntry` rows, and returns
+`{ ok: true, queued: 1110 }`. **No provider is ever called.** No code anywhere
+advances a delivery past `QUEUED`. There is no Resend, SES, Postmark or Twilio
+client in the repository.
 
-### 2. "Never silently fails"
+The composer reports *"Queued for 1,110 people — free charged."* Nothing was
+queued anywhere but our own table, and nothing will ever pick it up.
 
-Built: the preflight engine, per-destination blockers with specific reasons,
-independent jobs, idempotent retry, the audit log.
+### 2. Nothing in the product creates a contact
 
-**Missing two things.** There is no runtime to fail *in* — the whole failure
-model is exercised by a simulated pipeline. And preflight can only complain:
-it says "Instagram requires a different image ratio" and then offers the owner
-no way to fix it inside the product. A critic that cannot remediate pushes the
-work back onto the person we promised to help.
+`contact.create` appears exactly once in the codebase: in `prisma/seed.ts`.
 
-### 3. "Results in your language"
+There is no CSV import (the button on `/contacts` has no handler), no signup
+form, no opt-in capture, no path from a conversion to a contact record, and no
+double opt-in for SMS consent.
 
-Built: outcome-first analytics, per-channel breakdown, the plain-language
-report sentence, the HUD.
+### 3. Metrics are seeded, never ingested
 
-**Missing: every number is invented.** No tracked link is ever minted, no
-click is recorded, no conversion is ever ingested. "The Fall Cleanup campaign
-generated 21 quote requests" is the single most persuasive sentence in the
-product and it is currently fiction. This is the largest credibility gap.
+`metric.create` appears nowhere outside the seed. `/analytics` is computing
+honestly over numbers that were invented at seed time. Attribution data is
+real; platform-reported impressions and engagement are not.
 
----
+### 4. The inbox is a fixture
 
-## What to build, in order
+`conversation.create` appears only in the seed. No comment, DM, review or reply
+ever arrives.
 
-### 1. The runtime spine — persistence + scheduler
+### 5. Sixteen channels cannot publish, eleven cannot be bought
 
-One project, not two, and the prerequisite for everything else.
-
-- Wire Prisma to the existing schema; replace the `useReducer` store with
-  server actions.
-- Redis + BullMQ; enqueue on approval, keyed by the idempotency key that
-  already exists on `PublishJob`.
-- A worker that **re-runs preflight at fire time** (connections die between
-  approval and firing) and calls the existing `Publisher` interface.
-
-Cheaper than it sounds: the publishers, the preflight engine, the job model,
-the stage machine, and the idempotency scheme are all already written and
-tested. The worker is glue over finished parts.
-
-**Done when:** a post scheduled for 9:30 tomorrow publishes at 9:30 tomorrow
-with the laptop closed, and a failure is visible with a fix.
-
-### 2. Tracked links + conversion ingestion
-
-The highest value per line of code in the whole backlog, and the one that
-converts the analytics story from fiction to measurement.
-
-- `GET /r/[code]` — record the click, set a first-party attribution cookie,
-  302 to the destination with UTMs appended.
-- `POST /api/events` — accept `form_submission`, `booking`, `purchase`, `call`
-  from the customer's site, attribute via that cookie, write a `Conversion`.
-
-Both models already exist in the schema. This is perhaps 300 lines and it is
-what makes the differentiating sentence true.
-
-**Done when:** a real click on a real post produces a row, and a form
-submission on the customer's site shows up as a quote request attributed to
-the campaign that caused it.
-
-### 3. Media pipeline with **remediation**
-
-Turn preflight from critic into fixer. Upload → object storage → FFmpeg/sharp
-renditions per destination: crop 1:1 / 4:5 / 9:16, trim to 90s, strip EXIF.
-
-Preflight already knows every ratio and duration rule per channel. It should
-offer **"Fix it for me"** next to each warning instead of only naming the
-problem. That single change is the biggest usability win available, because
-cropping for four platforms by hand is exactly the chore people buy this to
-avoid.
-
-### 4. Real generation
-
-Swap the deterministic assembler in `generate.ts` for a model call conditioned
-on the voice profile discovery already extracts (register, emoji habit,
-sentence length, signature phrases). The scaffolding — extraction, per-channel
-adaptation, provenance, draft-only guarantees — is finished. This is the
-payload going into a built pipe.
-
-Also make discovery read a real site: robots.txt check, JSON-LD → OpenGraph →
-DOM, sitemap crawl. The `Fact<T>`/`SourceRef` model is already designed for it.
+The worker is honest about it — it writes `no publisher for <channel>` and
+fails the attempt rather than pretending — but `/advertise` presents routes
+whose "Ready now" refers to the account being connected, not to our ability to
+act on it.
 
 ---
 
-## The capability that isn't on any current list
+## The three findings that should set priorities
 
-Everything above is *completion*. This one is *strategy*.
+### Finding 1 — The spend ledger reports money that was never spent
 
-**The product has no feedback loop. It never learns.**
+This is the most serious thing in the audit, and it is not a missing feature.
+It is a **correctness bug in the subsystem built specifically to be honest
+about money.**
 
-Discovery reads the business once. Analytics reports what happened. Nothing
-connects the two. The suggestion engine proposes posts from *site facts* —
-services, offers, reviews — and never from *what has actually worked for this
-business*.
+`/spend` exists because blended, vague, after-the-fact cost reporting is the
+thing this product refuses to do. Right now it reports spend for messages that
+do not exist. Every number on that screen — month-to-date, the run rate, the
+forecast, the budget consumed — is derived from sends that never happened.
 
-That is the difference between a scheduler and a system worth keeping.
-Scheduling is commodity; Buffer and Later do it. "Gets measurably better at
-your specific business every month" is not commodity, and Perception is three
-small steps from it:
+Worse, it fails in the direction that looks fine. A ledger that *under*-reports
+gets noticed when the invoice arrives. This one over-reports against an invoice
+that will never come, so nothing contradicts it.
 
-1. Join published-post performance back onto its content item, format,
-   channel, day, and time — the metrics model exists.
-2. Feed that into `suggestPosts()` as an additional evidence source, so
-   suggestions cite performance the way they currently cite the website:
-   *"your before/after posts convert 3× your offer posts — here's another
-   one."*
-3. Surface the learning as its own artifact: **"what we learned about your
-   business this month."** Owners will read that even when they ignore charts.
+The fix is small and should not wait for a provider integration: **write the
+ledger when a provider confirms, not when a row is inserted.**
 
-The infrastructure is half-built already: per-channel metrics, suggestion
-provenance with `reasons[]`, and the `SuggestionSource` enum that a
-`performance` variant slots straight into. It only needs real metrics to join
-against — which is capability 2.
+### Finding 2 — The product's headline advice is for a list it cannot help you build
 
-**This is also why capability 2 outranks its apparent size.** Tracked links
-aren't just about honest reporting; they're the substrate the learning loop
-runs on. Without measurement there is nothing to learn from.
+`/advertise` opens with *"Start here: email your list"* and `routes.ts` says of
+the owned audience: *"finite — it only grows if something else feeds it."*
+
+Nothing in the product feeds it.
+
+This is a strategic gap, not an oversight. The whole ranking argument — that
+your own list beats bought reach by four orders of magnitude — is correct, and
+it makes list growth the highest-leverage feature in the product. A business
+that follows the advice exhausts its list and has no next move. Every paid
+route exists to convert strangers into people who know you, and there is no
+mechanism to capture the conversion.
+
+The pieces are already there: `/p.js` ships a tracking snippet to customer
+websites, `/api/events` ingests conversions, and conversions frequently carry
+an email address. The distance from "we recorded a quote request" to "we
+recorded a quote request and added them to the list, pending confirmation" is
+short.
+
+### Finding 3 — Reach is modelled far ahead of execution
+
+Eighteen channels are modelled, priced, capability-mapped and preflight-checked.
+Two can publish. Zero ad platforms can be bought through the product.
+
+This is defensible — the model is what makes the advice good, and building it
+first was right — but the gap now shows in the pathway screen, where a route
+can say "Ready now" and mean only that an account is connected.
 
 ---
 
-## What *not* to build
+## The plan
 
-- **More connectors.** Eighteen channels are modeled; two publish for real.
-  Depth beats breadth, the docs already commit to that, and every new
-  connector is ongoing maintenance against someone else's API.
-- **More UI polish.** Measured: every page is at or under one screen when
-  collapsed, no route overflows at three widths, motion and focus are handled.
-  The next UI work should be *remediation affordances* (capability 3), not
-  refinement.
-- **Paid-ad management.** Explicitly out of scope and correctly so — the HUD
-  tells owners where paid money works without becoming Ads Manager.
-- **Full CRM or social listening.** Same reasoning; both are separate
-  products wearing a feature's clothing.
+Ordered by the principle this codebase already runs on: **never ship the thing
+that lies, then make the recommended path actually work, then widen.**
 
-## What blocks a real customer, in order
+### Phase 7 — Stop the ledger claiming money that did not move *(small, urgent)*
 
-1. Nothing persists → cannot be used for real work at all.
-2. Nothing fires on a schedule → the core job is not done.
-3. No second user can sign in → roles and approvals are modeled but unusable,
-   which blocks agencies specifically, a likely first buyer.
-4. Numbers aren't real → the differentiator can't be demonstrated honestly.
-5. Media can't be uploaded or fixed → the multi-channel chore remains manual.
+1. Split the delivery lifecycle properly: `QUEUED → SENT → DELIVERED | BOUNCED |
+   FAILED`, and make `QUEUED` mean *waiting for a provider* rather than *done*.
+2. Move the `SpendEntry` write from "request accepted" to "provider confirmed",
+   keyed by the provider's own message id.
+3. Separate **committed** from **charged** on `/spend`, and show queued-but-unsent
+   as its own figure rather than folding it into either.
+4. Make `/send` say what actually happened: *"Queued — nothing has been sent
+   yet, because no sending service is connected."*
 
-## Recommendation
+**Acceptance:** with no provider configured, a send writes zero `SpendEntry`
+rows, `/spend` shows zero charged, and the composer says so plainly. A send
+with a provider writes exactly one ledger row per confirmed message, and the
+total reconciles against the provider's reported count.
 
-Complete one promise end to end before widening any of them. Concretely:
-**runtime spine → tracked links → learning loop.** That sequence makes the
-scheduler real, makes the reporting true, and then makes the product
-compound — in an order where each step is the prerequisite for the next.
+### Phase 8 — Email that actually arrives *(the route we recommend first)*
+
+The product tells every user to start with email. That has to work before
+anything else is widened.
+
+1. A `Sender` interface with one real implementation (Resend first — smallest
+   surface; SES second, because it is 12× cheaper and the price screen already
+   argues for it).
+2. Worker-side batching with per-message idempotency, so a retry cannot double-send.
+3. A **suppression list** as its own table, checked at send time — bounces and
+   complaints must never be re-mailed, and this is what protects the domain
+   reputation the preflight already warns about.
+4. Inbound webhooks: bounce and complaint → suppression; delivery, open and
+   click → delivery status. Signature-verified.
+5. Ledger written on provider confirmation (Phase 7's contract).
+
+**Acceptance:** an email sent from the composer arrives in a real mailbox; a
+hard bounce suppresses that address and the next send's reach drops by one; the
+ledger total equals the provider's own count for the period.
+
+### Phase 9 — Grow the list *(the missing half of our own advice)*
+
+1. **CSV import** with explicit consent capture per row, a dry-run preview
+   showing how many are actually reachable, and a hard refusal to mark anyone
+   `SUBSCRIBED` without a stated basis.
+2. **Signup forms** — hosted and embeddable, reusing the `/p.js` snippet already
+   on customer sites.
+3. **Conversions become contacts.** A quote request carrying an email creates a
+   `PENDING` contact linked to the campaign that caused it — which also closes
+   the attribution loop back into the audience.
+4. **Double opt-in** for SMS, because `PENDING` correctly counts as *no* and the
+   only way out of `PENDING` is a confirmation we do not currently send.
+
+**Acceptance:** a form submission on the mock site creates a pending contact; a
+confirmation click promotes it to subscribed; the reach figure on `/advertise`
+increases by one and the projected cost of the next send rises accordingly.
+
+### Phase 10 — Text messages that actually arrive
+
+1. Twilio adapter behind the same `Sender` interface.
+2. **STOP / HELP / START inbound handling**, mapped to consent state. This is
+   legally required and is the single highest-risk gap in the SMS path: we
+   collect the consent state and enforce it, but nothing can currently change
+   it in response to a reply.
+3. Delivery receipts → delivery status; per-segment cost reconciled against
+   Twilio's reported segment count, which is the check that proves `sms.ts` right.
+4. **Quiet hours enforced at fire time**, per recipient, by the worker — the
+   composer's check is for the hour the owner picked, and a scheduled send lands
+   at a different one.
+
+**Acceptance:** a text arrives; replying STOP flips consent to unsubscribed
+within one polling interval; the next send excludes that contact and the
+projection drops by exactly one recipient's cost; our segment count matches the
+provider's for a message containing an emoji.
+
+### Phase 11 — Real numbers in the reporting
+
+1. Metric ingestion per channel where the API allows it, into `Metric`.
+2. `/analytics` stops reading seeded rows and labels anything it cannot measure —
+   the `MEASURED` / `UNMEASURED` split already exists and is currently decorative.
+3. Reconcile platform-reported clicks against our own tracked-link clicks and
+   **show the discrepancy** rather than picking one.
+
+**Acceptance:** with a live account connected, an impression count on
+`/analytics` traces to a platform response; with none, the screen says the
+number is unavailable instead of showing a seeded one.
+
+### Phase 12 — Widen: publishers, then ads
+
+1. Publishers in fit order, not alphabetical: Facebook and Instagram first,
+   because those are what the ranking actually recommends for the industries
+   we model.
+2. **Ads: take the honest position.** Full API integration with eleven ad
+   platforms is a year of work and most of it is approval queues. The
+   defensible product is *plan here, buy there* — build the flight on `/spend`,
+   hand off with a deep link and a pre-filled brief, and import the spend back
+   for reporting. Say that plainly on the screen rather than implying we place
+   the buy.
+
+**Acceptance:** a planned flight produces a brief an owner can act on in the
+platform's own tool, and the spend comes back into the ledger tagged
+`certainty: 'estimated'` until the invoice settles.
+
+---
+
+## What is deliberately not on this list
+
+- **A second ad-network integration before email works.** Widening before the
+  recommended path functions would be building the demo outward.
+- **Sixteen more publishers.** The worker already fails honestly on an
+  unimplemented channel, which is the correct behaviour to have while waiting.
+- **Improving the cost model.** It is the most finished thing in the codebase.
+  Its problem is not accuracy; it is that nothing downstream of it moves money.
