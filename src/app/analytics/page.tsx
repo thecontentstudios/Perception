@@ -7,6 +7,7 @@ import { CHANNEL_META, ChannelIcon } from '@/lib/channels';
 import { addDays, fmtShort } from '@/lib/dates';
 import { PERFORMANCE } from '@/lib/demo-data';
 import { GOAL_LABELS } from '@/lib/types';
+import { Collapsible, CollapseAll } from '@/components/Collapsible';
 import { useApp } from '@/lib/store';
 import type { CampaignPerformance, ChannelMetrics } from '@/lib/types';
 
@@ -301,11 +302,18 @@ export default function AnalyticsPage() {
         </div>
       </div>
 
-      {/* Plain-language reports */}
-      <div className="card" style={{ marginBottom: 14 }}>
-        <div className="card-head">
-          <h3>What happened, in plain language</h3>
-        </div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+        <CollapseAll prefix="analytics." count={4} />
+      </div>
+
+      {/* Plain-language reports. Stays open by default: it is the answer most
+          people came for, and folding the headline to reveal charts would be
+          backwards. */}
+      <Collapsible
+        id="analytics.plain"
+        title="What happened, in plain language"
+        summary={`${perf.length} campaign${perf.length === 1 ? '' : 's'}`}
+      >
         <ul className="list-plain">
           {perf.map((p) => (
             <li key={p.campaignId} className="convo">
@@ -325,18 +333,24 @@ export default function AnalyticsPage() {
             </li>
           ))}
         </ul>
-      </div>
+      </Collapsible>
 
       <div className="grid cols-2" style={{ marginBottom: 14 }}>
-        <div className="card card-pad">
-          <h3>Leads by week</h3>
+        <Collapsible
+          id="analytics.weekly"
+          title="Leads by week"
+          summary={weekly.length > 0 ? `${weekly.length} weeks` : 'no data yet'}
+        >
           <div className="card-sub" style={{ marginBottom: 10 }}>
             All lead types, attributed by tracked links
           </div>
           {weekly.length > 0 ? <WeeklyLeadsChart data={weekly} /> : <div className="empty">No data yet.</div>}
-        </div>
-        <div className="card card-pad">
-          <h3>Which channel is doing the work</h3>
+        </Collapsible>
+        <Collapsible
+          id="analytics.channels"
+          title="Which channel is doing the work"
+          summary={byChannel.length > 0 ? `${byChannel.length} channels` : 'no data yet'}
+        >
           <div className="card-sub" style={{ marginBottom: 10 }}>
             Leads by channel — the standout in blue
           </div>
@@ -347,15 +361,18 @@ export default function AnalyticsPage() {
               {Math.round((bestConv.leads / bestConv.clicks) * 100)}% — the best rate of any channel.
             </div>
           )}
-        </div>
+        </Collapsible>
       </div>
 
-      {/* Table twin: every charted value, plus the details */}
-      <div className="card">
-        <div className="card-head">
-          <h3>Channel detail</h3>
-          <span className="card-sub">The full numbers behind the charts</span>
-        </div>
+      {/* Table twin: every charted value, plus the details. Folded by default
+          — it repeats what the charts above already showed, for people who
+          need the exact figures. */}
+      <Collapsible
+        id="analytics.detail"
+        title="Channel detail"
+        defaultOpen={false}
+        summary="the full numbers behind the charts"
+      >
         <div style={{ overflowX: 'auto' }}>
           <table className="table">
             <thead>
@@ -392,7 +409,7 @@ export default function AnalyticsPage() {
             </tbody>
           </table>
         </div>
-      </div>
+      </Collapsible>
     </div>
   );
 }

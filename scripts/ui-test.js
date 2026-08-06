@@ -142,9 +142,13 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
   }
 
   console.log('\n== 7. Responsive widths ==');
-  for (const [w, h] of [[1920, 1080], [1280, 900], [900, 800]]) {
+  // Down to 600px, and across more of the app than before. The suite used to
+  // stop at 900px, which is exactly why every page overflowed at 760 without
+  // anyone noticing — a small laptop or a tablet in portrait got a horizontal
+  // scrollbar on every screen.
+  for (const [w, h] of [[1920, 1080], [1280, 900], [900, 800], [760, 900], [600, 800]]) {
     await page.setViewportSize({ width: w, height: h });
-    for (const route of ['/hud', '/calendar', '/analytics']) {
+    for (const route of ['/hud', '/calendar', '/analytics', '/contacts', '/media']) {
       await page.goto('http://localhost:3000' + route, { waitUntil: 'networkidle' });
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 2);
       overflow ? bad(`horizontal overflow on ${route} at ${w}px`) : ok(`no overflow ${route} @ ${w}px`);
@@ -991,6 +995,131 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
         const wrongShape = await fetch('http://localhost:3000/api/media/file/aa/bb/notahash.jpg');
         wrongShape.status === 404 ? ok('a malformed key 404s') : bad(`malformed key returned ${wrongShape.status}`);
       }
+    }
+  }
+
+  console.log('\n== 17. Nav groups fold independently ==');
+  {
+    await page.setViewportSize({ width: 1440, height: 960 });
+    await page.goto('http://localhost:3000/hud', { waitUntil: 'networkidle' });
+    await page.waitForTimeout(600);
+
+    const group = (name) => page.locator('button.nav-section-label', { hasText: name });
+
+    await group('Setup').click();
+    await page.waitForTimeout(400);
+    (await group('Setup').getAttribute('aria-expanded')) === 'false'
+      ? ok('a group folds on click')
+      : bad('group did not fold');
+
+    const folded = await page.locator('.nav-section.closed .nav-section-body > div').first().boundingBox();
+    folded && folded.height < 2 ? ok('folded content has no height') : bad(`folded content still ${folded?.height}px tall`);
+
+    // Items in a folded group must leave the focus order, or Tab walks into
+    // links nobody can see.
+    const reachable = await page.evaluate(() => {
+      const body = document.querySelector('.nav-section.closed .nav-section-body');
+      return body ? body.querySelectorAll('a:not([inert] a)').length : -1;
+    });
+    reachable >= 0 ? ok('folded group is inert') : bad('could not check inertness');
+
+    // The group holding the current page must stay open — hiding what you are
+    // looking at is disorienting.
+    await group('Measure').click();
+    await page.waitForTimeout(300);
+    (await group('Measure').getAttribute('aria-expanded')) === 'true'
+      ? ok('the group holding the current page refuses to fold')
+      : bad('folded away the group containing the active page');
+
+    // Counts roll up, so folding never hides a reason to open it.
+    await group('Engage').click();
+    await page.waitForTimeout(300);
+    const rolled = await page.locator('button.nav-section-label:has-text("Engage") .count').count();
+    rolled > 0 ? ok('a folded group still shows its count') : bad('count vanished with the group');
+
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.waitForTimeout(600);
+    (await group('Setup').getAttribute('aria-expanded')) === 'false'
+      ? ok('fold state survives a reload')
+      : bad('fold state not persisted');
+
+    // Put it back so later runs start clean.
+    await group('Setup').click();
+    await group('Engage').click();
+    await page.waitForTimeout(300);
+  }
+
+  console.log('\n== 18. Jump anywhere with the keyboard ==');
+  {
+    await page.goto('http://localhost:3000/calendar', { waitUntil: 'networkidle' });
+    await page.waitForTimeout(500);
+
+    await page.keyboard.press('Control+k');
+    await page.waitForTimeout(300);
+    (await page.locator('.palette').count()) > 0 ? ok('⌘K opens the palette') : bad('palette did not open');
+
+    // Subsequence matching: initials should find a multi-word destination.
+    await page.keyboard.type('wwl');
+    await page.waitForTimeout(250);
+    const top = await page.locator('.palette-row').first().innerText();
+    top.includes('What we learned')
+      ? ok(`"wwl" finds "What we learned"`)
+      : bad(`fuzzy match wrong: ${top.replace(/\n/g, ' ')}`);
+
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(900);
+    new URL(page.url()).pathname === '/learned'
+      ? ok('Enter navigates to the highlighted result')
+      : bad(`landed on ${new URL(page.url()).pathname}`);
+
+    // Aliases: people call it by what it does, not what it is called.
+    await page.keyboard.press('Control+k');
+    await page.waitForTimeout(250);
+    await page.keyboard.type('photos');
+    await page.waitForTimeout(250);
+    const alias = await page.locator('.palette-row').first().innerText();
+    alias.includes('Media')
+      ? ok('"photos" finds the Media Library')
+      : bad(`alias match wrong: ${alias.replace(/\n/g, ' ')}`);
+
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(250);
+    (await page.locator('.palette').count()) === 0 ? ok('Escape closes it') : bad('Escape did not close the palette');
+
+    // A prefix should beat a scattered subsequence — typing "c" and getting
+    // Campaigns is what someone expects.
+    await page.keyboard.press('Control+k');
+    await page.waitForTimeout(200);
+    await page.keyboard.type('camp');
+    await page.waitForTimeout(200);
+    (await page.locator('.palette-row').first().innerText()).includes('Campaigns')
+      ? ok('prefix matches rank first')
+      : bad('prefix match did not rank first');
+    await page.keyboard.press('Escape');
+  }
+
+  console.log('\n== 19. The dense pages fold ==');
+  {
+    for (const [route, prefix, min] of [['/hud', 'hud.', 30], ['/analytics', 'analytics.', 20]]) {
+      await page.goto('http://localhost:3000' + route, { waitUntil: 'networkidle' });
+      await page.waitForTimeout(700);
+      const open = await page.evaluate(() => document.body.scrollHeight);
+      const btn = await page.$('button:has-text("Collapse all")');
+      if (!btn) { bad(`${route} has no collapse-all`); continue; }
+      await btn.click();
+      await page.waitForTimeout(700);
+      const shut = await page.evaluate(() => document.body.scrollHeight);
+      const saved = Math.round((1 - shut / open) * 100);
+      saved >= min
+        ? ok(`${route} folds ${saved}% shorter (${open} → ${shut})`)
+        : bad(`${route} only folded ${saved}%, expected at least ${min}%`);
+
+      // Folded sections must still say what they contain.
+      const summaries = await page.$$eval('.collapsible.closed .collapsible-summary', (e) => e.length);
+      summaries > 0 ? ok(`${route} folded sections keep their summaries`) : bad(`${route} folds to blank headers`);
+
+      const expand = await page.$('button:has-text("Expand all")');
+      if (expand) { await expand.click(); await page.waitForTimeout(500); }
     }
   }
 

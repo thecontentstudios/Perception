@@ -249,7 +249,42 @@ async function main() {
     });
     badKey.status === 401 ? ok('an unknown site key is refused') : bad(`bad key → ${badKey.status}`);
 
-    // Rate limiting: enough requests in one window must start being refused.
+    // Login limits protect an *account* without letting one office lock
+    // itself out. Twenty wrong passwords in a row must not stop the next
+    // person on the same IP signing in correctly.
+    for (let i = 0; i < 20; i++) {
+      await fetch(`${BASE}/api/auth/login`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: `stranger${i}@nowhere.example`, password: 'wrong-password-here' }),
+      });
+    }
+    const user = await db.user.findFirst({ where: { passwordHash: { not: null } } });
+    const stillWorks = await fetch(`${BASE}/api/auth/login`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        email: user!.email,
+        password: process.env.SEED_PASSWORD || 'demo-password-change-me',
+      }),
+    });
+    stillWorks.ok
+      ? ok('20 failed logins from one address do not lock out a valid one — offices share an IP')
+      : bad(`a valid sign-in was refused after other failures: ${stillWorks.status}`);
+
+    // But grinding one account does get stopped.
+    let acctLocked = false;
+    for (let i = 0; i < 16 && !acctLocked; i++) {
+      const r = await fetch(`${BASE}/api/auth/login`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: 'target@nowhere.example', password: `guess-number-${i}` }),
+      });
+      if (r.status === 429) acctLocked = true;
+    }
+    acctLocked ? ok('repeated guesses at one account are blocked') : bad('no per-account limit');
+
+    // Deliberately last in the file. Each of these bursts spends a real
+    // budget, and running them before the checks above meant the limiter was
+    // already exhausted by the time those ran — the tests failed on their own
+    // side effects rather than on anything the product did.
     let limited = false;
     for (let i = 0; i < 140 && !limited; i++) {
       const r = await fetch(`${BASE}/api/events`, {

@@ -50,9 +50,30 @@ const local = new Map<string, { count: number; resetAt: number }>();
 
 export async function rateLimit(
   key: string,
-  opts: { max: number; windowSec: number }
+  opts: {
+    max: number;
+    windowSec: number;
+    /**
+     * Read the counter without incrementing it.
+     *
+     * Login needs this: it has to *check* the per-account budget before doing
+     * any work, but only *spend* it when the attempt actually fails. Counting
+     * the check itself would make a correct password consume the same budget
+     * as a wrong one, and a busy user would lock themselves out by logging in.
+     */
+    peek?: boolean;
+  }
 ): Promise<RateLimitResult> {
   const r = await redis();
+
+  if (opts.peek) {
+    const count = await peekCount(key, opts.windowSec);
+    return {
+      ok: count <= opts.max,
+      remaining: Math.max(0, opts.max - count),
+      retryAfterSec: count > opts.max ? opts.windowSec : 0,
+    };
+  }
 
   if (r) {
     const bucket = `rl:${key}:${Math.floor(Date.now() / 1000 / opts.windowSec)}`;
@@ -82,6 +103,20 @@ export async function rateLimit(
     remaining: Math.max(0, opts.max - entry.count),
     retryAfterSec: Math.max(1, Math.ceil((entry.resetAt - now) / 1000)),
   };
+}
+
+/** Current count for a key, without spending any of the budget. */
+async function peekCount(key: string, windowSec: number): Promise<number> {
+  const r = await redis();
+  if (r) {
+    const bucket = `rl:${key}:${Math.floor(Date.now() / 1000 / windowSec)}`;
+    // `incr` then `decr` would be racy; a plain read is exact enough here,
+    // and ioredis exposes `get` on the same client.
+    const raw = await (r as unknown as { get(k: string): Promise<string | null> }).get(bucket);
+    return Number(raw ?? 0);
+  }
+  const entry = local.get(key);
+  return entry && entry.resetAt > Date.now() ? entry.count : 0;
 }
 
 /** Whether limits are shared across instances — surfaced by /api/health. */

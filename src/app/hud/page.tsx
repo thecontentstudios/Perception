@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import { fmtMoney, fmtNum } from '@/components/ui';
 import { CHANNEL_META, ChannelIcon } from '@/lib/channels';
+import { Collapsible, CollapseAll } from '@/components/Collapsible';
 import { PERFORMANCE } from '@/lib/demo-data';
 import {
   coverageFor,
@@ -255,13 +256,20 @@ export default function HudPage() {
         })}
       </div>
 
-      {/* The landscape matrix */}
-      <div className="card" style={{ marginBottom: 14 }}>
-        <div className="card-head">
-          <h3>The landscape</h3>
-          <span className="card-sub">
-            {rows.length} surfaces, ranked by fit{activeBrand ? ` for ${activeBrand.name}` : ' (best across your businesses)'}
-          </span>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+        <CollapseAll prefix="hud." count={3} />
+      </div>
+
+      {/* The landscape matrix — the tallest block on the page, so the one
+          most worth folding for anyone here to read the summary rather than
+          work the table. The filter controls stay in the header, reachable
+          without expanding. */}
+      <Collapsible
+        id="hud.landscape"
+        className="hud-section"
+        title="The landscape"
+        summary={`${rows.length} surfaces ranked by fit${activeBrand ? ` for ${activeBrand.name}` : ''}`}
+        actions={
           <div className="right">
             <div className="seg" role="tablist" aria-label="Surface type">
               {KIND_FILTERS.map((k) => (
@@ -271,7 +279,8 @@ export default function HudPage() {
               ))}
             </div>
           </div>
-        </div>
+        }
+      >
         <div className="table-scroll">
           <table className="table matrix">
             <thead>
@@ -355,12 +364,16 @@ export default function HudPage() {
             </tbody>
           </table>
         </div>
-      </div>
+      </Collapsible>
 
       <div className="grid cols-2">
-        {/* Spend & results by surface */}
-        <div className="card card-pad">
-          <h3>What the surfaces are producing</h3>
+        {/* Results by surface */}
+        <Collapsible
+          id="hud.producing"
+          className="hud-section"
+          title="What the surfaces are producing"
+          summary={byChannel.length === 0 ? 'no results yet' : `${byChannel.length} surfaces with results`}
+        >
           <div className="card-sub" style={{ marginBottom: 10 }}>
             Leads by surface{activeBrand ? ` — ${activeBrand.name}` : ''} · standout in blue
           </div>
@@ -398,11 +411,18 @@ export default function HudPage() {
               </div>
             </div>
           )}
-        </div>
+        </Collapsible>
 
-        {/* How the surfaces compose */}
-        <div className="card card-pad">
-          <h3>How the surfaces compose</h3>
+        {/* The playbook. Reference material, so it defaults closed — the
+            reason collapse exists is to hide what you read once, not what you
+            came for. */}
+        <Collapsible
+          id="hud.compose"
+          className="hud-section"
+          title="How the surfaces compose"
+          defaultOpen={false}
+          summary="create demand · capture it · keep it"
+        >
           <div className="card-sub" style={{ marginBottom: 10 }}>
             The playbook the HUD is built around
           </div>
@@ -426,7 +446,7 @@ export default function HudPage() {
           <div className="notice info" style={{ marginTop: 12 }}>
             Every campaign in Perception can span all three layers — one message, adapted per surface, approved once.
           </div>
-        </div>
+        </Collapsible>
       </div>
     </div>
   );

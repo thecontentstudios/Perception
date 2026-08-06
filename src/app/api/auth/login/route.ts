@@ -25,13 +25,25 @@ export async function POST(req: Request) {
   }
 
   const ip = clientIp(req);
-  // Per-IP, because per-email would let anyone lock out an account they know
-  // the address of just by failing to log in as them.
-  const limit = await rateLimit(`login:${ip}`, { max: 10, windowSec: 300 });
-  if (!limit.ok) {
+  // A **generous** per-IP ceiling, and this number matters more than it looks.
+  //
+  // The first version allowed ten attempts per five minutes per address, which
+  // is fine for one person at home and wrong for everyone else: an office
+  // shares one public IP, so twenty colleagues share one budget and ten fumbled
+  // passwords locks out the building. It also locked out this project's own
+  // test suite, which is how it was found.
+  //
+  // So the IP limit is set to catch a script, not a bad morning, and the
+  // targeted protection lives on the account instead (below).
+  // 600 per five minutes. Sized against the traffic it must never block: an
+  // office of fifty at Monday-morning peak, each signing in a few times with
+  // the odd fumble, is a couple of hundred. A credential-stuffing script is
+  // thousands. The gap between those is where this number belongs.
+  const ipLimit = await rateLimit(`login:ip:${ip}`, { max: 600, windowSec: 300 });
+  if (!ipLimit.ok) {
     return NextResponse.json(
-      { ok: false, reason: `Too many attempts. Try again in ${limit.retryAfterSec} seconds.` },
-      { status: 429, headers: { 'retry-after': String(limit.retryAfterSec) } }
+      { ok: false, reason: `Too many attempts. Try again in ${ipLimit.retryAfterSec} seconds.` },
+      { status: 429, headers: { 'retry-after': String(ipLimit.retryAfterSec) } }
     );
   }
 
@@ -48,13 +60,29 @@ export async function POST(req: Request) {
 
   if (!email || !password) return NextResponse.json(DENIED, { status: 401 });
 
+  // Per-account, counting **failures only**. This is the limit that actually
+  // stops someone grinding one person's password, and counting only failures
+  // is what stops it becoming a way to lock a colleague out: their own
+  // successful sign-ins never consume the budget.
+  const attemptKey = `login:acct:${email}`;
+  const acctLimit = await rateLimit(attemptKey, { max: 12, windowSec: 900, peek: true });
+  if (!acctLimit.ok) {
+    return NextResponse.json(
+      { ok: false, reason: `Too many failed attempts for that account. Try again in ${acctLimit.retryAfterSec} seconds.` },
+      { status: 429, headers: { 'retry-after': String(acctLimit.retryAfterSec) } }
+    );
+  }
+
   const user = await db.user.findUnique({
     where: { email },
     include: { memberships: { select: { organizationId: true, role: true } } },
   });
 
   const valid = await verifyPassword(password, user?.passwordHash ?? null);
-  if (!user || !valid) return NextResponse.json(DENIED, { status: 401 });
+  if (!user || !valid) {
+    await rateLimit(attemptKey, { max: 12, windowSec: 900 });
+    return NextResponse.json(DENIED, { status: 401 });
+  }
 
   if (user.memberships.length === 0) {
     return NextResponse.json(

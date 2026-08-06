@@ -6,6 +6,8 @@ import type { ReactNode } from 'react';
 import { BRANDS, TODAY, useApp } from '@/lib/store';
 import { fmtLong } from '@/lib/dates';
 import { usePersisted } from '@/lib/use-ui';
+import { NavSection, NavCollapseAll } from './NavSection';
+import { CommandPalette } from './CommandPalette';
 
 function Icon({ d }: { d: string }) {
   return (
@@ -115,30 +117,40 @@ export function Shell({ children }: { children: ReactNode }) {
         </div>
 
         <div className="nav-items">
-          {NAV_SECTIONS.map((section) => (
-            <div key={section.label} className="nav-section">
-              <div className="nav-section-label">{section.label}</div>
-              {section.items.map((item) => {
-                const active = item.href === '/' ? pathname === '/' : pathname.startsWith(item.href);
-                const count = countFor(item.href);
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    className={`nav-item ${active ? 'active' : ''}`}
-                    aria-current={active ? 'page' : undefined}
-                    title={railed ? item.label : undefined}
-                  >
-                    <Icon d={item.d} />
-                    <span className="nav-label">{item.label}</span>
-                    {count > 0 && (
-                      <span className={`count ${item.href === '/' ? 'alert' : ''}`}>{count}</span>
-                    )}
-                  </Link>
-                );
-              })}
-            </div>
-          ))}
+          {NAV_SECTIONS.map((section) => {
+            const isActive = (href: string) =>
+              href === '/' ? pathname === '/' : pathname.startsWith(href);
+            return (
+              <NavSection
+                key={section.label}
+                label={section.label}
+                railed={railed}
+                containsActive={section.items.some((i) => isActive(i.href))}
+                rolledUpCount={section.items.reduce((n, i) => n + countFor(i.href), 0)}
+              >
+                {section.items.map((item) => {
+                  const active = isActive(item.href);
+                  const count = countFor(item.href);
+                  return (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      className={`nav-item ${active ? 'active' : ''}`}
+                      aria-current={active ? 'page' : undefined}
+                      title={railed ? item.label : undefined}
+                    >
+                      <Icon d={item.d} />
+                      <span className="nav-label">{item.label}</span>
+                      {count > 0 && (
+                        <span className={`count ${item.href === '/' ? 'alert' : ''}`}>{count}</span>
+                      )}
+                    </Link>
+                  );
+                })}
+              </NavSection>
+            );
+          })}
+          {!railed && <NavCollapseAll />}
         </div>
 
         <button
@@ -159,6 +171,8 @@ export function Shell({ children }: { children: ReactNode }) {
           Clickable prototype — data resets on reload
         </div>
       </nav>
+
+      <CommandPalette sections={NAV_SECTIONS} />
 
       <div className="main">
         <header className="topbar">
