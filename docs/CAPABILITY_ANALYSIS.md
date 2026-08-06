@@ -141,7 +141,7 @@ can say "Ready now" and mean only that an account is connected.
 Ordered by the principle this codebase already runs on: **never ship the thing
 that lies, then make the recommended path actually work, then widen.**
 
-### Phase 7 — Stop the ledger claiming money that did not move *(small, urgent)*
+### Phase 7 — Stop the ledger claiming money that did not move — **done**
 
 1. Split the delivery lifecycle properly: `QUEUED → SENT → DELIVERED | BOUNCED |
    FAILED`, and make `QUEUED` mean *waiting for a provider* rather than *done*.
@@ -152,10 +152,13 @@ that lies, then make the recommended path actually work, then widen.**
 4. Make `/send` say what actually happened: *"Queued — nothing has been sent
    yet, because no sending service is connected."*
 
-**Acceptance:** with no provider configured, a send writes zero `SpendEntry`
-rows, `/spend` shows zero charged, and the composer says so plainly. A send
-with a provider writes exactly one ledger row per confirmed message, and the
-total reconciles against the provider's reported count.
+**Acceptance — met.** With no provider configured a send writes zero
+`SpendEntry` rows, `/spend` shows `0¢` charged against its committed figure,
+and both the composer and the worker say why. Against a stub provider,
+dispatch writes exactly one ledger row per confirmed message, a replayed
+confirmation returns `already-recorded` and does not double-charge, and a
+provider that reports success without a message id is failed rather than
+billed.
 
 ### Phase 8 — Email that actually arrives *(the route we recommend first)*
 

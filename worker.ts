@@ -19,6 +19,7 @@ import { Worker } from 'bullmq';
 import { PUBLISH_QUEUE, redisConnection, type PublishJobData } from './src/lib/queue';
 import { scanAndEnqueue } from './src/lib/queue/scheduler';
 import { runPublishJob } from './src/lib/queue/publish-job';
+import { dispatchAll } from './src/lib/queue/dispatch';
 import { db } from './src/lib/db';
 
 const SCAN_INTERVAL_MS = Number(process.env.SCAN_INTERVAL_MS || 30_000);
@@ -43,6 +44,7 @@ worker.on('failed', (job, err) => log(`job ${job?.id} attempt failed: ${err.mess
 worker.on('error', (err) => log('worker error:', err.message));
 
 let scanning = false;
+const lastHeld: Record<string, number> = {};
 async function scan() {
   // Skip rather than stack. A scan that outlives its interval would otherwise
   // overlap with the next one, and two scans racing is pointless work.
@@ -51,6 +53,24 @@ async function scan() {
   try {
     const r = await scanAndEnqueue();
     if (r.enqueued > 0) log(`scan: ${r.due} due, ${r.enqueued} enqueued`);
+
+    // Queued email and text messages, which are a different kind of work from
+    // scheduled posts: nothing enqueues them into BullMQ because there is no
+    // per-message job worth the overhead. The dispatcher drains the table.
+    //
+    // With no sending service configured this reports held messages once per
+    // pass rather than failing them. Held work can be rescued by connecting a
+    // provider; failed work has to be composed again, and turning a setup gap
+    // into lost work would be the wrong trade.
+    for (const d of await dispatchAll()) {
+      if (d.sent > 0 || d.failed > 0) {
+        log(`dispatch ${d.channel}: ${d.sent} sent, ${d.failed} failed, ${d.chargedCents}c charged`);
+      } else if (d.note && d.held !== lastHeld[d.channel]) {
+        // Say it when the number changes, not every thirty seconds forever.
+        log(`dispatch ${d.channel}: ${d.note}`);
+        lastHeld[d.channel] = d.held;
+      }
+    }
   } catch (e) {
     log('scan failed:', (e as Error).message);
   } finally {

@@ -5,6 +5,8 @@ import { reachFor } from '@/lib/audience';
 import { checkBudget, combine, projectEmail, projectSms, type Projection } from '@/lib/projection';
 import { checkQuietHours, previewRange, previewSms } from '@/lib/sms';
 import { EMAIL_RATES, SMS_RATES } from '@/lib/pricing';
+import { sendingStatus } from '@/lib/senders/registry';
+import { allocateCents, spendSplit } from '@/lib/billing';
 import type { Contact } from '@/lib/types';
 import { budgetScope, monthKey } from '../spend/route';
 
@@ -98,6 +100,7 @@ export async function POST(req: Request) {
 
     const settings = await organizationSettings(principal.organizationId);
     const sentThisMonth = await emailSentThisMonth(principal.organizationId);
+    const sending = sendingStatus(body.channel);
 
     let projection: Projection;
     let smsPreview: ReturnType<typeof previewSms> | null = null;
@@ -136,16 +139,21 @@ export async function POST(req: Request) {
           },
         })
         .then((rows) => rows.find((r) => r.scope === budgetScope(null, body.channel)) ?? rows[0] ?? null),
-      db.spendEntry.aggregate({
-        where: { organizationId: principal.organizationId, occurredAt: { gte: new Date(`${month}-01T00:00:00Z`) } },
-        _sum: { cents: true },
-      }),
+      spendSplit(
+        principal.organizationId,
+        new Date(`${month}-01T00:00:00Z`),
+        new Date(new Date(`${month}-01T00:00:00Z`).setUTCMonth(new Date(`${month}-01T00:00:00Z`).getUTCMonth() + 1))
+      ),
     ]);
 
+    // A cap has to count committed money as well as charged money. Counting
+    // only what a provider has confirmed would let a thousand queued messages
+    // sit against a cap they will certainly blow, and report the budget as
+    // healthy right up to the moment they send.
     const budgetCheck = budget
       ? checkBudget({
           capCents: budget.capCents,
-          spentCents: spent._sum.cents ?? 0,
+          spentCents: spent.chargedCents + spent.committedCents,
           projectedCents: projection.exactCents,
           hardStop: budget.hardStop,
         })
@@ -167,6 +175,7 @@ export async function POST(req: Request) {
     const quote = {
       ok: true,
       dryRun: body.dryRun === true,
+      sending,
       reach: {
         total: reach.total,
         reachable: reach.reachable,
@@ -220,54 +229,48 @@ export async function POST(req: Request) {
     }
 
     const variationId = body.variationId ?? `adhoc:${Date.now()}`;
-    const rate = body.channel === 'sms' ? SMS_RATES[settings.smsCountry] : null;
+    // The message cost for the whole send, allocated across the recipients so
+    // the rows sum back to the quote. Dividing and rounding loses the entire
+    // amount on email (0.08c a message rounds to nothing) and 9% on SMS.
+    const messageCents = projection.items
+      .filter((i) => i.kind === 'message' && i.certainty === 'exact')
+      .reduce((c, i) => c + i.cents, 0);
+    const perMessage = allocateCents(messageCents, reach.reachable);
 
-    // Deliveries and the ledger entry in one transaction. Splitting them lets
-    // a crash between the two produce sent messages with no record of what
-    // they cost, which is the one inconsistency this whole subsystem exists to
-    // prevent.
+    // Queue the messages. **No ledger rows are written here**, and that is the
+    // correction this phase exists to make.
+    //
+    // The previous version wrote deliveries and `SpendEntry` rows in one
+    // transaction, with a comment explaining that splitting them risked "sent
+    // messages with no record of what they cost". The reasoning was sound and
+    // the premise was false: nothing was being sent. Writing both together
+    // guaranteed the opposite inconsistency — a record of cost for messages no
+    // provider had ever seen — which is the worse of the two, because an
+    // over-reported ledger has no invoice to contradict it.
+    //
+    // Cost is now carried on the delivery row and becomes a charge in
+    // `dispatch()`, when a provider hands back a reference. Until then the
+    // money is *committed*, which `/spend` reports as its own figure.
     const written = await db.$transaction(async (tx) => {
-      if (body.channel === 'sms' && smsPreview && rate) {
-        const perRecipient = Math.round(smsPreview.segments * rate.perSegmentCents);
+      if (body.channel === 'sms' && smsPreview) {
         await tx.smsDelivery.createMany({
-          data: reach.contacts.map((c) => ({
+          data: reach.contacts.map((c, i) => ({
             variationId,
             contactId: c.id,
             segments: smsPreview!.segments,
             encoding: smsPreview!.encoding,
-            costCents: perRecipient,
+            costCents: perMessage[i] ?? 0,
             status: 'QUEUED' as const,
           })),
         });
       } else {
         await tx.emailDelivery.createMany({
-          data: reach.contacts.map((c) => ({ variationId, contactId: c.id, status: 'QUEUED' as const })),
-        });
-      }
-
-      // One ledger row per cost shape, not one big number — so the /spend
-      // breakdown can answer "why" without re-deriving anything.
-      //
-      // Zero-cost *message* rows are written too, and that is not an
-      // oversight. A send inside a provider's free allowance costs nothing but
-      // consumes allowance, and the allowance is tracked by summing `units` on
-      // these rows. Skipping them because the money was zero meant the free
-      // tier never depleted: every send in the month looked like the first
-      // one, and the twentieth campaign was quoted at $0.00 and billed.
-      // A zero-cost *fixed* row carries no such meaning, so it is skipped.
-      for (const item of projection.items) {
-        if (item.cents === 0 && item.kind !== 'message') continue;
-        await tx.spendEntry.create({
-          data: {
-            organizationId: principal.organizationId,
-            brandId: body.brandId ?? null,
-            channel: body.channel.toUpperCase() as never,
-            kind: item.kind,
-            certainty: item.certainty,
-            cents: item.cents,
-            units: item.kind === 'message' ? reach.reachable : 1,
-            note: `${item.label} — ${item.detail}`,
-          },
+          data: reach.contacts.map((c, i) => ({
+            variationId,
+            contactId: c.id,
+            costCents: perMessage[i] ?? 0,
+            status: 'QUEUED' as const,
+          })),
         });
       }
 
@@ -275,15 +278,28 @@ export async function POST(req: Request) {
         data: {
           organizationId: principal.organizationId,
           actorUserId: principal.userId,
-          action: `${body.channel}.sent`,
+          action: `${body.channel}.queued`,
           target: variationId,
-          detail: `${reach.reachable} recipients, ${projection.exactCents}¢`,
+          detail: `${reach.reachable} recipients, ${projection.exactCents}c committed, ${
+            sending.ready ? `sending via ${sending.provider}` : 'no sending service connected'
+          }`,
         },
       });
       return reach.reachable;
     });
 
-    return NextResponse.json({ ...quote, dryRun: false, queued: written, variationId });
+    return NextResponse.json({
+      ...quote,
+      dryRun: false,
+      queued: written,
+      variationId,
+      // `sent` is not a field this route can set. It queues; the dispatcher
+      // sends. Reporting a send here is what produced the original lie.
+      sent: 0,
+      committedCents: projection.exactCents,
+      chargedCents: 0,
+      sending,
+    });
   });
 }
 
@@ -334,17 +350,27 @@ async function organizationSettings(organizationId: string): Promise<{
   };
 }
 
-/** Sends this calendar month, which decide how much free allowance is left. */
+/**
+ * Email that will consume this month's free allowance — sent *and* queued.
+ *
+ * Counting only confirmed sends would quote the second campaign of the month
+ * as though the first had not happened, because the first is still sitting in
+ * the queue waiting for a provider. The allowance is consumed by messages that
+ * are going to go out, not by messages that have already gone.
+ */
 async function emailSentThisMonth(organizationId: string): Promise<number> {
   const month = monthKey(new Date());
-  const agg = await db.spendEntry.aggregate({
-    where: {
-      organizationId,
-      channel: 'EMAIL',
-      kind: 'message',
-      occurredAt: { gte: new Date(`${month}-01T00:00:00Z`) },
-    },
-    _sum: { units: true },
-  });
-  return agg._sum.units ?? 0;
+  const [charged, queued] = await Promise.all([
+    db.spendEntry.aggregate({
+      where: {
+        organizationId,
+        channel: 'EMAIL',
+        kind: 'message',
+        occurredAt: { gte: new Date(`${month}-01T00:00:00Z`) },
+      },
+      _sum: { units: true },
+    }),
+    db.emailDelivery.count({ where: { status: 'QUEUED', contact: { organizationId } } }),
+  ]);
+  return (charged._sum.units ?? 0) + queued;
 }

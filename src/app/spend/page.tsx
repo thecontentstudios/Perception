@@ -1,7 +1,7 @@
 'use client';
 
-import { useMemo, useState } from 'react';
-import { AD_RATES, EMAIL_RATES, FIXED_COSTS, SMS_RATES, money, range } from '@/lib/pricing';
+import { useEffect, useMemo, useState } from 'react';
+import { AD_RATES, EMAIL_RATES, FIXED_COSTS, SMS_RATES, amount, money, range } from '@/lib/pricing';
 import { forecastMonth, projectAds, type AdPlan } from '@/lib/projection';
 import { CHANNEL_META } from '@/lib/channels';
 import type { Channel } from '@/lib/types';
@@ -24,6 +24,13 @@ import type { Channel } from '@/lib/types';
 
 const PLANNABLE = Object.keys(AD_RATES) as Channel[];
 
+interface Ledger {
+  chargedCents: number;
+  committedCents: number;
+  committedMessages: number;
+  sending: { email: { ready: boolean; why: string }; sms: { ready: boolean; why: string } };
+}
+
 export default function SpendPage() {
   // Ad flights being considered. Starts with one so the planner is usable on
   // arrival rather than presenting an empty state and an "Add" button.
@@ -32,20 +39,54 @@ export default function SpendPage() {
   ]);
   const [capDollars, setCapDollars] = useState(500);
   const [hardStop, setHardStop] = useState(true);
-  const [spentDollars, setSpentDollars] = useState(212);
+
+  /**
+   * The real ledger, rather than a slider.
+   *
+   * This screen used to take month-to-date spend from a number input, which
+   * made it a planner wearing a report's clothes. It now reads what was
+   * actually charged, what is committed, and whether anything is able to send
+   * at all — because a month-to-date of zero means something very different
+   * depending on that last answer.
+   */
+  const [ledger, setLedger] = useState<Ledger | null>(null);
+  const [ledgerError, setLedgerError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    fetch('/api/spend')
+      .then((r) => r.json())
+      .then((d) => {
+        if (!live) return;
+        if (d.ok) setLedger(d);
+        else setLedgerError(d.reason ?? 'Could not read the ledger.');
+      })
+      .catch(() => live && setLedgerError('Could not reach the server.'));
+    return () => {
+      live = false;
+    };
+  }, []);
 
   const adProjection = useMemo(() => projectAds(plans), [plans]);
+
+  const chargedCents = ledger?.chargedCents ?? 0;
+  const queuedCents = ledger?.committedCents ?? 0;
+  const queuedMessages = ledger?.committedMessages ?? 0;
+  const nothingCanSend =
+    ledger != null && !ledger.sending.email.ready && !ledger.sending.sms.ready;
 
   const now = new Date();
   const forecast = useMemo(
     () =>
       forecastMonth({
-        spentCents: spentDollars * 100,
-        committedCents: adProjection.exactCents,
+        spentCents: chargedCents,
+        // Queued messages plus planned flights. Both are money promised and
+        // not yet moved, which is exactly what this field means.
+        committedCents: queuedCents + adProjection.exactCents,
         now,
       }),
     // `now` is stable within a render pass; the forecast only needs the date.
-    [spentDollars, adProjection.exactCents, now]
+    [chargedCents, queuedCents, adProjection.exactCents, now]
   );
 
   const capCents = capDollars * 100;
@@ -70,22 +111,48 @@ export default function SpendPage() {
       </div>
 
       {/* ------------------------------------------------------ the month */}
+      {nothingCanSend && (
+        <div className="notice warn" style={{ marginBottom: 14 }}>
+          <span>
+            <strong>Nothing can send yet.</strong> No email or text service is connected, so queued messages are
+            being held and no message cost has been charged. The figures below are real — they are simply real
+            zeroes.
+          </span>
+        </div>
+      )}
+      {ledgerError && (
+        <div className="notice warn" style={{ marginBottom: 14 }}>
+          <span>
+            <strong>Could not read the ledger.</strong> {ledgerError} The planner below still works; the
+            month-to-date figures are unavailable rather than guessed.
+          </span>
+        </div>
+      )}
+
+      {/* Charged, committed and projected as three tiles, never as one.
+          The first is a fact, the second is a promise, and the third is
+          arithmetic on both — and the original bug on this screen was that
+          the first two were the same number. */}
       <div className="grid cols-3" style={{ marginBottom: 14 }}>
         <div className="card stat-tile">
-          <div className="st-label">Spent this month</div>
-          <div className="st-value">{money(forecast.spentCents)}</div>
+          <div className="st-label">Charged this month</div>
+          <div className="st-value">{amount(chargedCents)}</div>
           <div className="st-delta flat">
-            day {forecast.dayOfMonth} of {forecast.daysInMonth}
+            {ledger ? `day ${forecast.dayOfMonth} of ${forecast.daysInMonth} — confirmed by a provider` : 'reading…'}
           </div>
         </div>
         <div className="card stat-tile">
           <div className="st-label">Committed, not yet charged</div>
-          <div className="st-value">{money(forecast.committedCents)}</div>
-          <div className="st-delta flat">scheduled sends and planned ad flights</div>
+          <div className="st-value">{amount(forecast.committedCents)}</div>
+          <div className="st-delta flat">
+            {queuedMessages > 0
+              ? `${queuedMessages.toLocaleString('en-US')} queued message${queuedMessages === 1 ? '' : 's'}, plus planned flights`
+              : 'planned ad flights'}
+          </div>
         </div>
         <div className="card stat-tile">
           <div className="st-label">Month ends at</div>
-          <div className={`st-value ${over ? 'bad' : ''}`}>{money(forecast.projectedMonthEndCents)}</div>
+          <div className={`st-value ${over ? 'bad' : ''}`}>{amount(forecast.projectedMonthEndCents)}</div>
           <div className="st-delta flat">{over ? `${money(forecast.projectedMonthEndCents - capCents)} over cap` : 'inside cap'}</div>
         </div>
       </div>
@@ -113,13 +180,13 @@ export default function SpendPage() {
         </div>
         <div className="cap-legend">
           <span>
-            <b>{money(forecast.spentCents)}</b> spent
+            <b>{amount(forecast.spentCents)}</b> spent
           </span>
           <span>
-            <b>{money(forecast.projectedMonthEndCents)}</b> projected {over ? `(${pct}% of cap)` : ''}
+            <b>{amount(forecast.projectedMonthEndCents)}</b> projected {over ? `(${pct}% of cap)` : ''}
           </span>
           <span>
-            <b>{money(capCents)}</b> cap
+            <b>{amount(capCents)}</b> cap
           </span>
         </div>
 
@@ -134,17 +201,6 @@ export default function SpendPage() {
               min={0}
               step={50}
               onChange={(e) => setCapDollars(Math.max(0, Number(e.target.value) || 0))}
-            />
-          </label>
-          <label>
-            Spent so far
-            <input
-              type="number"
-              className="input"
-              style={{ width: 110, marginLeft: 8 }}
-              value={spentDollars}
-              min={0}
-              onChange={(e) => setSpentDollars(Math.max(0, Number(e.target.value) || 0))}
             />
           </label>
           <label>

@@ -13,6 +13,9 @@
 import 'dotenv/config';
 import { db } from '../src/lib/db';
 import { hashPassword, verifyPassword, passwordProblem, needsRehash } from '../src/lib/auth/password';
+import { __installSender } from '../src/lib/senders/registry';
+import { dispatch } from '../src/lib/queue/dispatch';
+import { recordCharge } from '../src/lib/billing';
 
 const BASE = process.env.BASE_URL || 'http://localhost:3000';
 let failures = 0;
@@ -204,7 +207,7 @@ async function main() {
     }
   }
 
-  console.log('\n== Money: the quote and the charge come from one place ==');
+  console.log('\n== Money: a charge means a provider took the message ==');
   {
     const user = await db.user.findFirst({ where: { passwordHash: { not: null } } });
     if (!user) {
@@ -220,49 +223,165 @@ async function main() {
       const orgId = (await db.membership.findFirst({ where: { userId: user.id } }))?.organizationId ?? '';
       const month = new Date().toISOString().slice(0, 7);
 
-      // Start from a clean slate so the arithmetic below is checkable.
-      await db.spendEntry.deleteMany({ where: { organizationId: orgId } });
-      await db.budget.deleteMany({ where: { organizationId: orgId } });
+      const wipe = async () => {
+        await db.spendEntry.deleteMany({ where: { organizationId: orgId } });
+        await db.budget.deleteMany({ where: { organizationId: orgId } });
+        await db.emailDelivery.deleteMany({ where: { variationId: { startsWith: 'adhoc:' } } });
+        await db.smsDelivery.deleteMany({ where: { variationId: { startsWith: 'adhoc:' } } });
+      };
+      await wipe();
 
       const send = (body: unknown) =>
         fetch(`${BASE}/api/send`, { method: 'POST', headers: auth, body: JSON.stringify(body) }).then(async (r) => ({
           status: r.status,
           body: await r.json(),
         }));
+      const spendView = () => fetch(`${BASE}/api/spend`, { headers: auth }).then((r) => r.json());
 
-      // A dry run must not move money. This is the check that would catch a
-      // preview accidentally wired to the real path.
+      // A dry run must not move money — the check that catches a preview
+      // accidentally wired to the real path.
       const quote = await send({ channel: 'email', subject: 'Hello', body: 'Hi {{name}}', dryRun: true });
-      const afterQuote = await db.spendEntry.count({ where: { organizationId: orgId } });
-      afterQuote === 0 ? ok('a dry run writes nothing to the ledger') : bad(`${afterQuote} ledger rows written by a preview`);
+      (await db.spendEntry.count({ where: { organizationId: orgId } })) === 0
+        ? ok('a dry run writes nothing to the ledger')
+        : bad('a preview wrote ledger rows');
       quote.body.reach?.reachable > 0
-        ? ok(`the quote states an audience (${quote.body.reach.reachable} reachable of ${quote.body.reach.total})`)
+        ? ok(`the quote states an audience (${quote.body.reach.reachable} of ${quote.body.reach.total} reachable)`)
         : bad('quote reported no reachable audience');
 
-      // The real send must charge exactly what the quote said.
+      // ---- the correction this phase exists to make ----
+      // Accepting a send must not charge for it: nothing has been sent at the
+      // moment the request returns, and the previous version charged anyway.
       const real = await send({ channel: 'email', subject: 'Hello', body: 'Hi {{name}}' });
-      const charged = await db.spendEntry.aggregate({ where: { organizationId: orgId }, _sum: { cents: true, units: true } });
+      const ledgerAfterQueue = await db.spendEntry.count({ where: { organizationId: orgId } });
+      const queuedRows = await db.emailDelivery.count({
+        where: { status: 'QUEUED', contact: { organizationId: orgId } },
+      });
+
       real.body.queued === quote.body.reach.reachable
-        ? ok('the send goes to exactly the audience the quote named')
-        : bad(`quoted ${quote.body.reach.reachable}, sent ${real.body.queued}`);
-      (charged._sum.cents ?? 0) === quote.body.projection.exactCents
-        ? ok(`charged what was quoted (${charged._sum.cents}c)`)
-        : bad(`quoted ${quote.body.projection.exactCents}c, charged ${charged._sum.cents}c`);
+        ? ok('the send queues exactly the audience the quote named')
+        : bad(`quoted ${quote.body.reach.reachable}, queued ${real.body.queued}`);
+      ledgerAfterQueue === 0
+        ? ok('queueing charges nothing — no provider has seen it yet')
+        : bad(`${ledgerAfterQueue} ledger rows written before anything was sent`);
+      queuedRows === real.body.queued
+        ? ok(`${queuedRows} messages waiting, priced, uncharged`)
+        : bad(`queued ${real.body.queued} but found ${queuedRows} rows`);
+      real.body.sent === 0 && real.body.chargedCents === 0
+        ? ok('and the response says so: sent 0, charged 0')
+        : bad(`response claimed sent=${real.body.sent} charged=${real.body.chargedCents}`);
+      real.body.sending?.ready === false
+        ? ok('the response names the reason no message left')
+        : bad('response did not report the missing sender');
 
-      // A free send still has to consume the free allowance, or the allowance
-      // never depletes and every send in the month is quoted at zero.
-      (charged._sum.units ?? 0) === real.body.queued
-        ? ok(`a free send still records its ${charged._sum.units} units against the allowance`)
-        : bad(`allowance not tracked: ${charged._sum.units} units for ${real.body.queued} recipients`);
+      const view = await spendView();
+      view.chargedCents === 0 ? ok('/spend reports nothing charged') : bad(`/spend reports ${view.chargedCents}c charged`);
+      view.committedMessages === queuedRows
+        ? ok(`/spend reports ${view.committedMessages} messages committed, kept separate from charged`)
+        : bad(`/spend committed ${view.committedMessages} vs ${queuedRows} queued`);
 
-      // A hard cap refuses, and an acknowledgement does not get around it.
+      // ---- with a provider: exactly one charge per confirmed message ----
+      // A stub, because the accounting is under test rather than an HTTP
+      // client. The machinery is the machinery Phase 8 puts a provider behind.
+      let sendCalls = 0;
+      __installSender('email', {
+        channel: 'email',
+        name: 'Test Provider',
+        rateKey: 'resend',
+        async send(m) {
+          sendCalls += 1;
+          return { ok: true, providerRef: `test-${m.deliveryId}` };
+        },
+      });
+
+      try {
+        const first = await dispatch('email', { limit: 10_000 });
+        const charges = await db.spendEntry.count({ where: { organizationId: orgId, kind: 'message' } });
+        const stillQueued = await db.emailDelivery.count({
+          where: { status: 'QUEUED', contact: { organizationId: orgId } },
+        });
+
+        first.sent === queuedRows ? ok(`dispatch sent all ${first.sent}`) : bad(`sent ${first.sent} of ${queuedRows}`);
+        charges === first.sent
+          ? ok(`exactly one ledger row per confirmed message (${charges})`)
+          : bad(`${charges} ledger rows for ${first.sent} sends`);
+        stillQueued === 0 ? ok('nothing left queued') : bad(`${stillQueued} still queued`);
+        sendCalls === first.sent
+          ? ok(`the provider was called exactly ${sendCalls} times`)
+          : bad(`provider called ${sendCalls} times for ${first.sent} sends`);
+
+        // Idempotency: a webhook firing twice must not charge twice.
+        const rows = await db.emailDelivery.findMany({
+          where: { status: 'SENT', contact: { organizationId: orgId } },
+          include: { contact: true },
+          take: 5,
+        });
+        const replayed = await Promise.all(
+          rows.map((row) =>
+            recordCharge({
+              organizationId: row.contact.organizationId,
+              channel: 'email',
+              providerRef: row.providerRef!,
+              cents: row.costCents,
+              units: 1,
+            })
+          )
+        );
+        const afterReplay = await db.spendEntry.count({ where: { organizationId: orgId, kind: 'message' } });
+        replayed.every((r) => r === 'already-recorded')
+          ? ok('a replayed confirmation reports already-recorded')
+          : bad(`replay outcomes: ${replayed.join(', ')}`);
+        afterReplay === charges ? ok('and the total is unchanged — no double charge') : bad('replay double-charged');
+
+        const second = await dispatch('email', { limit: 10_000 });
+        second.sent === 0 && second.considered === 0
+          ? ok('a second pass finds nothing and charges nothing')
+          : bad(`second pass considered ${second.considered}, sent ${second.sent}`);
+
+        // This send was inside the free allowance, so the honest total is
+        // 1,110 ledger rows adding to zero — not zero rows. The distinction
+        // matters: the rows are what deplete the allowance.
+        const after = await spendView();
+        const rowsNow = await db.spendEntry.count({ where: { organizationId: orgId, kind: 'message' } });
+        after.committedCents === 0 && after.committedMessages === 0
+          ? ok('/spend reports nothing left committed once everything is sent')
+          : bad(`after dispatch: ${after.committedMessages} still committed`);
+        rowsNow === first.sent
+          ? ok(`${rowsNow} ledger rows for ${first.sent} sends, totalling ${after.chargedCents}c (free tier)`)
+          : bad(`${rowsNow} ledger rows for ${first.sent} sends`);
+      } finally {
+        __installSender('email', null);
+      }
+
+      // ---- a success without a message id is a failure, not a charge ----
+      __installSender('email', {
+        channel: 'email',
+        name: 'Sloppy Provider',
+        rateKey: 'resend',
+        async send() {
+          return { ok: true };
+        },
+      });
+      try {
+        await send({ channel: 'email', subject: 'Hello', body: 'Hi' });
+        const before = await db.spendEntry.count({ where: { organizationId: orgId, kind: 'message' } });
+        const r = await dispatch('email', { limit: 10_000 });
+        const afterCount = await db.spendEntry.count({ where: { organizationId: orgId, kind: 'message' } });
+        r.failed > 0 && r.sent === 0
+          ? ok('a success with no message id is failed, not charged')
+          : bad(`unreferenced success: sent ${r.sent}, failed ${r.failed}`);
+        afterCount === before ? ok('and nothing was added to the ledger') : bad('an unreferenced send was charged');
+      } finally {
+        __installSender('email', null);
+      }
+
+      // ---- caps count committed money, not just charged ----
+      await wipe();
+      await db.spendEntry.create({
+        data: { organizationId: orgId, channel: 'EMAIL', kind: 'message', certainty: 'exact', cents: 0, units: 5000, note: 'test: allowance used' },
+      });
       await fetch(`${BASE}/api/spend`, {
         method: 'PUT', headers: auth,
         body: JSON.stringify({ month, channel: 'email', capCents: 1, hardStop: true }),
-      });
-      // Exhaust the free tier so the next send actually costs something.
-      await db.spendEntry.create({
-        data: { organizationId: orgId, channel: 'EMAIL', kind: 'message', certainty: 'exact', cents: 0, units: 5000, note: 'test: allowance used' },
       });
       const blocked = await send({ channel: 'email', subject: 'Hello', body: 'Hi' });
       blocked.status === 402 ? ok('a hard cap refuses the send (402)') : bad(`hard cap returned ${blocked.status}`);
@@ -271,16 +390,37 @@ async function main() {
         ? ok('and acknowledging does not get around it — that is what "hard" means')
         : bad(`acknowledgement bypassed a hard cap: ${forced.status}`);
 
-      // A soft cap warns once, then lets it through.
       await fetch(`${BASE}/api/spend`, {
         method: 'PUT', headers: auth,
         body: JSON.stringify({ month, channel: 'email', capCents: 1, hardStop: false }),
       });
       const warned = await send({ channel: 'email', subject: 'Hello', body: 'Hi' });
       warned.status === 409 && warned.body.needsAcknowledgement
-        ? ok('a soft cap warns first (409)') : bad(`soft cap returned ${warned.status}`);
+        ? ok('a soft cap warns first (409)')
+        : bad(`soft cap returned ${warned.status}`);
       const through = await send({ channel: 'email', subject: 'Hello', body: 'Hi', acknowledgeOverBudget: true });
       through.body.ok ? ok('and goes through once acknowledged') : bad(`acknowledged send failed: ${through.body.reason}`);
+
+      // The acknowledged send above is now sitting in the queue, priced. Its
+      // cost must reconcile against the quote exactly — this is the check that
+      // caught per-message rounding wiping out an entire campaign's cost.
+      const committedNow = await db.emailDelivery.aggregate({
+        where: { status: 'QUEUED', contact: { organizationId: orgId } },
+        _sum: { costCents: true },
+        _count: true,
+      });
+      const quotedCents = through.body.committedCents ?? 0;
+      (committedNow._sum.costCents ?? 0) === quotedCents && quotedCents > 0
+        ? ok(`${committedNow._count} messages carry exactly the quoted ${quotedCents}c between them`)
+        : bad(`quoted ${quotedCents}c, delivery rows hold ${committedNow._sum.costCents}c`);
+
+      // Held messages must count against the cap. Otherwise a thousand queued
+      // messages sit against a budget they will certainly blow while the
+      // budget reports itself healthy.
+      const withCommitted = await send({ channel: 'email', subject: 'Hello', body: 'Hi', dryRun: true });
+      (withCommitted.body.budget?.spentCents ?? 0) >= quotedCents && quotedCents > 0
+        ? ok(`the cap counts ${withCommitted.body.budget.spentCents}c, including committed money`)
+        : bad(`cap saw ${withCommitted.body.budget?.spentCents}c with ${quotedCents}c committed`);
 
       // SMS is blocked by unpaid registration rather than silently filtered.
       const sms = await send({ channel: 'sms', body: 'Slots left this week' });
@@ -309,9 +449,7 @@ async function main() {
         console.log('  SKIP no lower-privileged seeded user to test budget permissions');
       }
 
-      await db.spendEntry.deleteMany({ where: { organizationId: orgId } });
-      await db.budget.deleteMany({ where: { organizationId: orgId } });
-      await db.emailDelivery.deleteMany({ where: { variationId: { startsWith: 'adhoc:' } } });
+      await wipe();
     }
   }
 

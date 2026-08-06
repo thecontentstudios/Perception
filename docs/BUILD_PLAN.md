@@ -859,3 +859,90 @@ more than one distinct fit value.
 telling the truth: the database was down and the fixtures happened to agree,
 because the seed is generated from the same fixture file. Worth recording
 because the instinct was to distrust the indicator rather than check it.
+
+---
+
+## Phase 7 — A charge means a provider took the message
+
+The capability audit found one thing that was not a missing feature but a
+**correctness bug in the subsystem built specifically to be honest about
+money**: `/api/send` priced an audience, wrote delivery rows, wrote
+`SpendEntry` rows, and returned `{ ok: true, queued: 1110 }` — having called no
+provider, in a codebase containing no provider. Everything on `/spend` was
+therefore money that had not moved.
+
+It failed in the direction that looks fine. A ledger that under-reports is
+corrected by the first invoice; one that over-reports against an invoice that
+will never arrive has nothing to contradict it.
+
+### 7.1 — `QUEUED` now means what the word means
+
+`QUEUED` was a terminal state the product described as a completed send.
+The lifecycle is now `QUEUED → SENT → DELIVERED | BOUNCED | FAILED`, and cost
+lives on the delivery row from the moment it is queued — which is what makes
+committed money computable without storing a total that could drift.
+
+### 7.2 — One rule, one function
+
+**A message cost is recorded when a provider confirms the message, keyed by
+the provider's own reference, and at no other time.** `recordCharge` in
+`src/lib/billing.ts` is the only place a message charge enters the ledger, and
+a unique index on `(organizationId, providerRef)` makes recording it twice
+impossible rather than merely unlikely — a webhook that fires twice, a worker
+that crashes between the send and the write, a replayed batch, all charge once.
+
+It uses `createMany({ skipDuplicates: true })` rather than a create in a
+try/catch. Both are idempotent; only one of them stops logging a database
+error every time the system behaves correctly. Alarms that fire on success are
+alarms people learn to ignore.
+
+### 7.3 — The seam, before the provider
+
+`src/lib/senders/` defines the contract and registers **nothing**. An empty
+registry is a fact the rest of the system reads and acts on: the send path
+checks it, refuses to claim a message was sent, refuses to charge, and says so
+in the composer, on `/spend`, and in the worker log. A missing registry would
+have left the same code with nothing to check.
+
+`dispatch()` owns the moment a charge becomes real, and was written now so that
+Phase 8 is a drop-in behind an interface that is already under test — against a
+stub, which is how "exactly one ledger row per confirmed message" can be
+verified without a provider.
+
+### 7.4 — Charged, committed, projected
+
+Three tiles, never one. The first is a fact, the second is a promise, the third
+is arithmetic on both — and the original bug was that the first two were the
+same number. `/spend` also stopped taking month-to-date from a number input,
+which had made it a planner wearing a report's clothes.
+
+Budget caps now count committed money as well as charged. Counting only
+confirmed spend would let a thousand queued messages sit against a cap they
+will certainly blow while the budget reported itself healthy.
+
+### What the tests caught
+
+**Per-message rounding wiped out an entire campaign's cost.** Moving cost onto
+individual delivery rows created a problem the one-row-per-send design never
+had: a single message usually costs *less than a cent*. Email at 80¢ per
+thousand is 0.08¢ each, which rounds to zero — so an 89¢ campaign to 1,110
+people committed nothing, charged nothing, and reported itself free. That is
+the original bug wearing a different hat. Rounding up turns 89¢ into $11.10;
+rounding to nearest loses 9% on SMS.
+
+`allocateCents` distributes the remainder one cent at a time so the parts sum
+to the whole exactly, and the test asserts the property a customer would check:
+*1,110 messages carry exactly the quoted 89¢ between them.*
+
+**The worker reported its own page size as a fact about the queue.** "200
+messages waiting" for a backlog of 2,220, because 200 is the batch limit.
+
+**Two test assertions were wrong, not the code.** A free send produces 1,110
+ledger rows totalling zero — the rows are what deplete the allowance, so
+asserting `chargedCents > 0` was asserting the wrong thing. And the
+committed-versus-cap check had wiped its own committed money before looking
+for it.
+
+**`money(0)` says "free" again.** Right for a price, wrong on a tile labelled
+"Charged this month". `amount()` already existed for exactly this and had not
+been applied here.

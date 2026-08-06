@@ -13,6 +13,7 @@ import { amount, money, range } from '../src/lib/pricing';
 import { reachFor, reachSummary } from '../src/lib/audience';
 import { humanWait, inGroup, outcomeSentence, routesFor } from '../src/lib/routes';
 import { CAPABILITIES, COMPARABLE } from '../src/lib/capabilities';
+import { allocateCents } from '../src/lib/billing';
 import { ACCOUNTS, BRANDS, CONTACTS } from '../src/lib/demo-data';
 import type { Contact as ContactShape } from '../src/lib/types';
 
@@ -336,6 +337,32 @@ console.log('\n== Reach: who can actually be reached ==');
     ? ok('the reason pending consent is excluded is stated, with the penalty')
     : bad('no explanation for excluding pending SMS consent');
   reachSummary(sms).includes('1 of 5') ? ok('the summary leads with the shortfall') : bad('summary hides the gap: ' + reachSummary(sms));
+}
+
+console.log('\n== Allocating a total across messages ==');
+{
+  // The property that matters is the one a customer would check.
+  for (const [total, n] of [[89, 1110], [678, 308], [0, 500], [7, 3], [100, 1], [5, 5]] as const) {
+    const parts = allocateCents(total, n);
+    const sum = parts.reduce((a, b) => a + b, 0);
+    const whole = parts.every((p) => Number.isInteger(p) && p >= 0);
+    sum === total && parts.length === n && whole
+      ? ok(`${total}c across ${n} messages sums to ${sum}c in whole cents`)
+      : bad(`${total}c across ${n} gave ${sum}c over ${parts.length} parts`);
+  }
+
+  // The specific failure this replaced: naive division wiped an email
+  // campaign's entire cost, and lost 9% of an SMS campaign's.
+  const naiveEmail = Math.round(89 / 1110) * 1110;
+  const naiveSms = Math.round(678 / 308) * 308;
+  naiveEmail === 0 && allocateCents(89, 1110).reduce((a, b) => a + b, 0) === 89
+    ? ok('an 89c email campaign survives allocation (naive rounding made it free)')
+    : bad('email allocation is wrong');
+  naiveSms !== 678 && allocateCents(678, 308).reduce((a, b) => a + b, 0) === 678
+    ? ok(`a 678c SMS campaign survives allocation (naive rounding gave ${naiveSms}c)`)
+    : bad('sms allocation is wrong');
+
+  eq(allocateCents(5, 0), [], 'allocating to nobody gives nothing');
 }
 
 console.log('\n== Routes: three units that must never be averaged ==');

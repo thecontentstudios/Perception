@@ -494,6 +494,16 @@ model EmailTemplate {
   @@index([organizationId])
 }
 
+/// The life of one message to one person.
+///
+/// `QUEUED` means **we have accepted it and nothing has left the building.**
+/// That reading is the whole point of this enum: the first version treated a
+/// queued row as a completed send, charged for it, and reported the money as
+/// spent — for messages no provider had ever seen.
+///
+/// Money is recorded at `SENT`, and only when a provider hands back its own
+/// reference for the message. Everything after `SENT` is delivery news, which
+/// changes what we know about the message but never what it cost.
 enum DeliveryStatus {
   QUEUED
   SENT
@@ -503,6 +513,7 @@ enum DeliveryStatus {
   BOUNCED
   COMPLAINED
   SUPPRESSED
+  FAILED
 }
 
 model EmailDelivery {
@@ -511,10 +522,19 @@ model EmailDelivery {
   contactId   String
   contact     Contact        @relation(fields: [contactId], references: [id])
   status      DeliveryStatus @default(QUEUED)
+  /// What this message will cost when it is sent, priced when it was queued.
+  ///
+  /// Stored rather than recomputed so that a rate change, or a provider
+  /// switch, cannot retroactively alter the price of a message already
+  /// waiting in the queue. It is also what makes committed spend computable:
+  /// the sum of this column over unsent rows is money promised but not moved.
+  costCents   Int            @default(0)
   providerRef String?
   sentAt      DateTime?
   openedAt    DateTime?
   clickedAt   DateTime?
+  failedAt    DateTime?
+  failReason  String?
 
   @@index([variationId, status])
   @@index([contactId])
@@ -681,8 +701,20 @@ model SpendEntry {
   campaignId     String?
   campaign       Campaign?    @relation(fields: [campaignId], references: [id])
   note           String?
+  /// The provider's own id for the thing that was charged.
+  ///
+  /// Present for every message cost and absent for everything else, which is
+  /// exactly the behaviour the unique index below needs. Postgres treats NULLs
+  /// as distinct, so many fixed-cost and imported-ad rows coexist happily
+  /// while two confirmations of the same message collide and the second is
+  /// rejected. (The Budget model needed the opposite and had to fold its
+  /// nullability into a non-null `scope` string; here the default is what we
+  /// want, which is worth saying out loud so the difference reads as a
+  /// decision rather than an inconsistency.)
+  providerRef    String?
   occurredAt     DateTime     @default(now())
 
+  @@unique([organizationId, providerRef])
   @@index([organizationId, occurredAt])
   @@index([organizationId, channel, occurredAt])
 }

@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { db, dbAvailable } from '@/lib/db';
 import { handle, require_, HttpError } from '@/lib/auth/guard';
 import { forecastMonth } from '@/lib/projection';
+import { spendSplit } from '@/lib/billing';
+import { sendingStatus } from '@/lib/senders/registry';
 import type { Channel } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -83,9 +85,16 @@ export async function GET(req: Request) {
       byKind.set(e.kind, (byKind.get(e.kind) ?? 0) + e.cents);
     }
 
-    // Committed: scheduled variations that will cost money but have not yet.
-    // Counted separately from spend because it has not left the account, and
-    // folding it into "spent" would make the month look worse than it is.
+    // Committed: messages priced and queued that no provider has taken yet.
+    //
+    // This is the figure whose absence made the whole screen wrong. Spend used
+    // to be written the moment a send was accepted, so committed money and
+    // charged money were the same number and the number was charged. They are
+    // now read apart, and the screen shows both, because "we will owe this"
+    // and "we owe this" are different facts and an owner needs to tell them
+    // apart before deciding anything.
+    const split = await spendSplit(principal.organizationId, start, end);
+
     const scheduled = await db.channelVariation.count({
       where: {
         contentItem: { campaign: { organizationId: principal.organizationId } },
@@ -95,13 +104,28 @@ export async function GET(req: Request) {
       },
     });
 
-    const forecast = forecastMonth({ spentCents: exactCents, committedCents: 0, now });
+    // Whether anything can actually send. A month-to-date of zero means
+    // something very different depending on the answer: no campaigns, or no
+    // way to run them.
+    const sending = { email: sendingStatus('email'), sms: sendingStatus('sms') };
+
+    const forecast = forecastMonth({
+      spentCents: exactCents,
+      committedCents: split.committedCents,
+      now,
+    });
 
     return NextResponse.json({
       ok: true,
       month,
       exactCents,
       estimatedCents,
+      /** Money a provider has confirmed. Same as exactCents; named for clarity. */
+      chargedCents: split.chargedCents,
+      /** Priced, queued, and not yet sent by anybody. */
+      committedCents: split.committedCents,
+      committedMessages: split.committedMessages,
+      sending,
       byChannel: [...byChannel.values()].sort((a, b) => b.exactCents - a.exactCents),
       byKind: Object.fromEntries(byKind),
       scheduledSends: scheduled,

@@ -133,11 +133,19 @@ export default function SendPage() {
       });
       const data = await res.json();
       if (data.ok) {
+        // What this says used to be "Queued for 1,110 people — free charged",
+        // which was wrong twice over: nothing had been queued anywhere but our
+        // own table, and nothing had been charged because nothing had been
+        // sent. The message now distinguishes accepted from sent, and names
+        // the reason when the two differ.
+        const n = Number(data.queued).toLocaleString('en-US');
+        const people = data.queued === 1 ? 'person' : 'people';
+        const committed = money(data.committedCents ?? projection.exactCents);
         setResult({
           ok: true,
-          message: `Queued for ${Number(data.queued).toLocaleString('en-US')} ${
-            data.queued === 1 ? 'person' : 'people'
-          } — ${money(data.projection?.exactCents ?? projection.exactCents)} charged.`,
+          message: data.sending?.ready
+            ? `Queued for ${n} ${people}. ${committed} will be charged as ${data.sending.provider} confirms each one.`
+            : `Held for ${n} ${people} — ${committed} committed, nothing charged. ${data.sending?.why ?? ''} They will go out as soon as one is connected.`,
         });
       } else if (data.needsAcknowledgement) {
         setResult({ ok: false, message: `${data.reason} Press send again to go ahead anyway.` });
