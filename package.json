@@ -2,7 +2,7 @@
   "name": "perception",
   "version": "0.1.0",
   "private": true,
-  "description": "Perception — a campaign operating system for small businesses. One campaign, everywhere your customers are.",
+  "description": "Perception \u2014 a campaign operating system for small businesses. One campaign, everywhere your customers are.",
   "engines": {
     "node": ">=20.0.0"
   },
@@ -20,7 +20,8 @@
     "worker": "tsx worker.ts",
     "test:worker": "tsx scripts/worker-test.ts",
     "test:media": "tsx scripts/media-test.ts",
-    "test:security": "tsx scripts/security-test.ts"
+    "test:security": "tsx scripts/security-test.ts",
+    "mock:resend": "node scripts/mock-resend.js"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",

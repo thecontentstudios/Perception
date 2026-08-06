@@ -21,7 +21,7 @@ to the cent. What has not kept pace is the part that touches the outside world.
 | Worker + queue | ~420 lines | Real; fires scheduled posts |
 | Tests | ~3,200 lines | 487 checks, five suites |
 | **Channels that can actually publish** | **2 of 18** | Bluesky, Mastodon |
-| **Channels that can actually send** | **0 of 2** | Email and SMS write rows and stop |
+| **Channels that can actually send** | **1 of 2** | Email through Resend; SMS is Phase 10 |
 | **Ad platforms that can actually buy** | **0 of 11** | Priced, planned, never purchased |
 
 ## Verified: what is genuinely real
@@ -160,7 +160,7 @@ confirmation returns `already-recorded` and does not double-charge, and a
 provider that reports success without a message id is failed rather than
 billed.
 
-### Phase 8 — Email that actually arrives *(the route we recommend first)*
+### Phase 8 — Email that actually arrives — **done**
 
 The product tells every user to start with email. That has to work before
 anything else is widened.
@@ -176,9 +176,18 @@ anything else is widened.
    click → delivery status. Signature-verified.
 5. Ledger written on provider confirmation (Phase 7's contract).
 
-**Acceptance:** an email sent from the composer arrives in a real mailbox; a
-hard bounce suppresses that address and the next send's reach drops by one; the
-ledger total equals the provider's own count for the period.
+**Acceptance — met, against a stand-in provider.** A send goes out through the
+real Resend adapter over a real HTTP round trip, personalised, with
+`List-Unsubscribe` and an idempotency key; a signed hard bounce suppresses the
+address and the next send's reach drops by exactly one; a soft bounce does not;
+an unsigned webhook is refused; and the ledger holds one row per confirmed
+message.
+
+**Not verified: delivery to a real mailbox.** That needs a Resend account and a
+verified domain, which this environment does not have. The adapter speaks the
+real protocol and the stand-in enforces the same contract — bearer auth,
+idempotency keys, the `{ id }` response, Svix-signed webhooks — so what remains
+untested is the account, not the code.
 
 ### Phase 9 — Grow the list *(the missing half of our own advice)*
 

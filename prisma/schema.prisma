@@ -33,18 +33,20 @@ model Organization {
   ingestKey String   @unique
   createdAt DateTime @default(now())
 
-  brands      Brand[]
-  memberships Membership[]
-  accounts    ConnectedAccount[]
-  campaigns   Campaign[]
-  media       MediaAsset[]
-  contacts    Contact[]
-  segments    AudienceSegment[]
-  auditEvents AuditEvent[]
-  conversions Conversion[]
-  sessions    Session[]
-  spend       SpendEntry[]
-  budgets     Budget[]
+  brands       Brand[]
+  memberships  Membership[]
+  accounts     ConnectedAccount[]
+  campaigns    Campaign[]
+  media        MediaAsset[]
+  contacts     Contact[]
+  segments     AudienceSegment[]
+  auditEvents  AuditEvent[]
+  conversions  Conversion[]
+  sessions     Session[]
+  spend        SpendEntry[]
+  budgets      Budget[]
+  batches      MessageBatch[]
+  suppressions Suppression[]
 }
 
 model Brand {
@@ -519,6 +521,8 @@ enum DeliveryStatus {
 model EmailDelivery {
   id          String         @id @default(cuid())
   variationId String
+  batchId     String?
+  batch       MessageBatch?  @relation(fields: [batchId], references: [id])
   contactId   String
   contact     Contact        @relation(fields: [contactId], references: [id])
   status      DeliveryStatus @default(QUEUED)
@@ -535,9 +539,15 @@ model EmailDelivery {
   clickedAt   DateTime?
   failedAt    DateTime?
   failReason  String?
+  bouncedAt   DateTime?
+  /// hard | soft | complaint. A hard bounce suppresses the address; a soft one
+  /// records the event and leaves the list alone, because a full mailbox or a
+  /// bad afternoon at a mail server is not a dead address.
+  bounceKind  String?
 
   @@index([variationId, status])
   @@index([contactId])
+  @@index([providerRef])
 }
 
 // ---------------------------------------------------------------------------
@@ -751,6 +761,66 @@ model Budget {
   @@index([organizationId, month])
 }
 
+/// One composed message and the settings it goes out with.
+///
+/// Exists because the dispatcher has to render a body per recipient and had
+/// nowhere to read one from — Phase 7 queued delivery rows with a cost and no
+/// content. Copying the body onto every row would work and would store a
+/// thousand identical paragraphs; a batch stores it once and each delivery
+/// points at it.
+model MessageBatch {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  brandId        String?
+  channel        Channel
+  variationId    String
+  subject        String?
+  body           String
+  /// The From identity, captured at send time. A later change to the sending
+  /// domain must not rewrite what an already-queued message claimed to be.
+  fromName       String?
+  fromEmail      String?
+  /// Where `{{link}}` points, captured at send time.
+  ///
+  /// On the batch rather than resolved per message, so every recipient of one
+  /// campaign gets the same destination even if the campaign's call to action
+  /// is edited afterwards.
+  linkUrl        String?
+  createdAt      DateTime     @default(now())
+
+  emails EmailDelivery[]
+  texts  SmsDelivery[]
+
+  @@index([organizationId, createdAt])
+}
+
+/// An address we must never send to again.
+///
+/// Bounces and complaints are not advisory. A provider that sees you re-mail a
+/// hard bounce will throttle you, and a mailbox provider that sees it will
+/// start filing the rest of your mail as spam — so the damage is not to the
+/// one message, it is to every message after it. The preflight already warns
+/// about sending reputation; this is the mechanism that actually protects it.
+///
+/// Scoped per organization and channel: one tenant's bounce is not another's,
+/// and an address that bounced on email says nothing about a phone number.
+model Suppression {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  channel        Channel
+  /// Lower-cased and trimmed on the way in, so a lookup cannot miss by case.
+  address        String
+  /// bounce | complaint | unsubscribe | manual
+  reason         String
+  detail         String?
+  createdAt      DateTime     @default(now())
+
+  @@unique([organizationId, channel, address])
+  @@index([organizationId, channel])
+}
+
 /// A text message that was sent, priced at the moment of sending.
 ///
 /// Segments, not messages, because segments are the billing unit — see
@@ -759,6 +829,8 @@ model Budget {
 model SmsDelivery {
   id          String         @id @default(cuid())
   variationId String
+  batchId     String?
+  batch       MessageBatch?  @relation(fields: [batchId], references: [id])
   contactId   String
   contact     Contact        @relation(fields: [contactId], references: [id])
   status      DeliveryStatus @default(QUEUED)

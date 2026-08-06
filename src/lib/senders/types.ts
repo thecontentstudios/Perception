@@ -23,7 +23,19 @@ export interface OutboundMessage {
   to: string;
   /** Email only. */
   subject?: string;
+  /** Plain text. Always present — some clients only render this. */
   body: string;
+  /** Email only. Rendered from the same source as `body`. */
+  html?: string;
+  /**
+   * Where a one-click unsubscribe posts to.
+   *
+   * Gmail and Yahoo require a `List-Unsubscribe` header on bulk mail; without
+   * one, delivery degrades however clean the list is. It is also simply the
+   * right thing: making someone hunt for the link is how a bounce becomes a
+   * spam complaint, which costs far more than the unsubscribe would have.
+   */
+  unsubscribeUrl?: string;
   /** What we priced this at when it was queued, for the ledger. */
   costCents: number;
   /** SMS only — segments, so a provider's count can be checked against ours. */

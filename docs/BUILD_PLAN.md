@@ -946,3 +946,109 @@ for it.
 **`money(0)` says "free" again.** Right for a price, wrong on a tile labelled
 "Charged this month". `amount()` already existed for exactly this and had not
 been applied here.
+
+---
+
+## Phase 8 — Email that actually arrives
+
+Phase 7 built the seam and registered nothing behind it. This fills it, for the
+one channel the product recommends first — because `/advertise` opening with
+"Start here: email your list" while email could not send made the whole pathway
+a demonstration.
+
+### 8.1 — The adapter (`src/lib/senders/resend.ts`)
+
+Resend first, and not because it is cheapest — it is not; SES is 12× cheaper and
+`/spend` says so. It has the smallest surface in the rate card: one POST, bearer
+auth, a JSON body. The first thing in this codebase that touches the outside
+world should spend its complexity on the parts that are genuinely hard, not on
+request signing.
+
+Two decisions carry most of the weight:
+
+**The idempotency key is our delivery id.** A crash after the provider accepted
+a message but before we recorded its reference would otherwise send it twice —
+the recipient gets two copies and we are charged for both. With the key, the
+retry returns the original id and Phase 7's unique index turns the second charge
+into `already-recorded`.
+
+**Errors are classified by who has to change something.** A 429 or a 5xx is
+retryable because the identical request might work later. A 422 is not, because
+the request itself is wrong, and retrying it every thirty seconds forever is how
+a queue turns into a bill for nothing.
+
+### 8.2 — Suppression (`src/lib/suppression.ts`)
+
+The preflight has warned about sending reputation since Phase 1. This is the
+first thing that protects it.
+
+The cost of re-mailing a hard bounce is not the one message. Mailbox providers
+score a sender on how often they mail addresses that bounce or complain, and
+that score decides whether *everything else* reaches an inbox — so a small error
+degrades every future campaign, weeks after the cause.
+
+**Hard bounces suppress; soft ones do not.** A full mailbox or a bad afternoon
+at a mail server is not a dead address, and suppressing on it would quietly
+shrink a healthy list every time somebody's server hiccuped. Complaints are
+always terminal.
+
+Suppression is checked twice: when the audience is built, so the quote is
+honest, and again in the dispatcher, so a bounce that arrives between queueing
+and sending still stops the message. The second check is the one that matters.
+
+### 8.3 — Webhooks, verified
+
+`/api/webhooks/resend` is the only way the product learns an address is dead.
+It is also the endpoint that mutates the suppression list, which makes an
+unsigned caller able to suppress a customer's entire audience — a denial of
+service on their marketing that, from inside the product, would look exactly
+like a very bad list. Every request is Svix-verified against the raw bytes,
+inside a five-minute replay window, before anything is read from it.
+
+Delivery news can only move a row forward. Out-of-order events are normal, and
+an "opened" arriving after a "clicked" must not undo the stronger signal.
+
+### 8.4 — Unsubscribing that works
+
+Every message carries a `List-Unsubscribe` header and a visible footer link.
+Generating those without building the endpoint would have been worse than
+omitting them: a header pointing at a 404 tells Gmail the sender is careless,
+and a dead footer link converts someone who wanted to leave into someone who
+presses "report spam" — which costs far more.
+
+`/u/<deliveryId>` handles both the human click (GET, confirmation page) and RFC
+8058 one-click (POST, no page). The delivery id is the credential, deliberately:
+requiring a login to stop receiving mail is the pattern that makes people give
+up and complain, and the blast radius of a guessed id is one address
+unsubscribing itself.
+
+### 8.5 — The stand-in (`scripts/mock-resend.js`)
+
+Speaks the real protocol — bearer auth, idempotency keys, the `{ id }` response
+shape, the error shapes the adapter classifies — and fires Svix-signed webhooks
+back. The code under test is the real adapter taking a real HTTP round trip.
+
+### What the tests caught
+
+**A dangling `{{link}}` shipped "Book here: " to a customer's inbox.** The
+composer offers the token as a chip, so it is easy to insert and easy to forget
+to point anywhere. The send now refuses, and the composer reveals a destination
+field the moment the token appears.
+
+**A typo'd merge token reached the recipient.** `fillMergeFields` leaves unknown
+tokens in place, which is right in the composer — the writer should see that
+`{{naem}}` is not a field — and wrong at send time, where the audience is the
+one reading. The render strips them; the composer still shows them. The two
+behaviours look inconsistent and are not: the difference is who is reading.
+
+**`.env` claimed a sender existed.** Setting `RESEND_API_KEY` for local testing
+made the running deployment report itself able to send, which broke a Phase 7
+assertion by making it true. The deployment now genuinely has no sender and says
+so; the suite supplies its own in-process. `__installSender(ch, null)` was also
+falling back to configuration instead of forcing *none* — so a test written to
+describe the unconfigured world silently started describing the configured one.
+
+**A test skipped itself into passing, twice.** Once when the mock was not
+running (now a failure, not a skip, when `MOCK_RESEND_URL` is set), and once
+when a lookup scoped to `status: 'SENT'` found nothing because every message in
+that section had already been bounced.

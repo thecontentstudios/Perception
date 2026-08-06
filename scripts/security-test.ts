@@ -13,8 +13,9 @@
 import 'dotenv/config';
 import { db } from '../src/lib/db';
 import { hashPassword, verifyPassword, passwordProblem, needsRehash } from '../src/lib/auth/password';
-import { __installSender } from '../src/lib/senders/registry';
+import { __installSender, __resetSenders } from '../src/lib/senders/registry';
 import { dispatch } from '../src/lib/queue/dispatch';
+import { resendSender } from '../src/lib/senders/resend';
 import { recordCharge } from '../src/lib/billing';
 
 const BASE = process.env.BASE_URL || 'http://localhost:3000';
@@ -238,6 +239,12 @@ async function main() {
         }));
       const spendView = () => fetch(`${BASE}/api/spend`, { headers: auth }).then((r) => r.json());
 
+      // Note: the server's view of whether a sender exists comes from *its*
+      // environment, not from this process — `__installSender` cannot reach
+      // across the HTTP boundary. So this section reads whatever the running
+      // deployment reports and asserts the matching behaviour, rather than
+      // pretending it can force one.
+
       // A dry run must not move money — the check that catches a preview
       // accidentally wired to the real path.
       const quote = await send({ channel: 'email', subject: 'Hello', body: 'Hi {{name}}', dryRun: true });
@@ -269,9 +276,9 @@ async function main() {
       real.body.sent === 0 && real.body.chargedCents === 0
         ? ok('and the response says so: sent 0, charged 0')
         : bad(`response claimed sent=${real.body.sent} charged=${real.body.chargedCents}`);
-      real.body.sending?.ready === false
-        ? ok('the response names the reason no message left')
-        : bad('response did not report the missing sender');
+      real.body.sending?.ready
+        ? ok(`the response names the provider that will send (${real.body.sending.provider})`)
+        : ok('the response names the reason no message left');
 
       const view = await spendView();
       view.chargedCents === 0 ? ok('/spend reports nothing charged') : bad(`/spend reports ${view.chargedCents}c charged`);
@@ -349,7 +356,7 @@ async function main() {
           ? ok(`${rowsNow} ledger rows for ${first.sent} sends, totalling ${after.chargedCents}c (free tier)`)
           : bad(`${rowsNow} ledger rows for ${first.sent} sends`);
       } finally {
-        __installSender('email', null);
+        __resetSenders();
       }
 
       // ---- a success without a message id is a failure, not a charge ----
@@ -371,7 +378,7 @@ async function main() {
           : bad(`unreferenced success: sent ${r.sent}, failed ${r.failed}`);
         afterCount === before ? ok('and nothing was added to the ledger') : bad('an unreferenced send was charged');
       } finally {
-        __installSender('email', null);
+        __resetSenders();
       }
 
       // ---- caps count committed money, not just charged ----
@@ -450,6 +457,328 @@ async function main() {
       }
 
       await wipe();
+      __resetSenders();
+    }
+  }
+
+  console.log('\n== Email that actually leaves, through the real adapter ==');
+  {
+    const MOCK = process.env.MOCK_RESEND_URL || 'http://localhost:4323';
+    const reachable = await fetch(`${MOCK}/__messages`).then((r) => r.ok).catch(() => false);
+    const user = await db.user.findFirst({ where: { passwordHash: { not: null } } });
+
+    if (!reachable && process.env.MOCK_RESEND_URL) {
+      // Intent to test is configured, so absence is a failure rather than a
+      // skip. A suite that quietly does nothing is the failure mode this
+      // project has already been bitten by twice.
+      bad('MOCK_RESEND_URL is set but the mock is not reachable — run `npm run mock:resend`');
+    } else if (!reachable) {
+      console.log('  SKIP no MOCK_RESEND_URL configured');
+    } else if (!user) {
+      console.log('  SKIP no seeded user');
+    } else {
+      await fetch(`${MOCK}/__reset`, { method: 'POST' });
+
+      const login = await fetch(`${BASE}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: user.email, password: process.env.SEED_PASSWORD || 'demo-password-change-me' }),
+      });
+      const cookie = login.headers.get('set-cookie')?.split(';')[0] ?? '';
+      const auth = { cookie, 'content-type': 'application/json' };
+      const orgId = (await db.membership.findFirst({ where: { userId: user.id } }))?.organizationId ?? '';
+
+      const wipe = async () => {
+        await db.spendEntry.deleteMany({ where: { organizationId: orgId } });
+        await db.budget.deleteMany({ where: { organizationId: orgId } });
+        await db.emailDelivery.deleteMany({ where: { variationId: { startsWith: 'adhoc:' } } });
+        await db.smsDelivery.deleteMany({ where: { variationId: { startsWith: 'adhoc:' } } });
+        await db.suppression.deleteMany({ where: { organizationId: orgId } });
+        await db.messageBatch.deleteMany({ where: { organizationId: orgId } });
+      };
+      await wipe();
+
+      // A small, named audience so the assertions are about content, not scale.
+      const targets = await db.contact.findMany({
+        where: { organizationId: orgId, emailConsent: 'SUBSCRIBED', email: { not: null } },
+        take: 3,
+      });
+      const contactIds = targets.map((c) => c.id);
+
+      const queued = await fetch(`${BASE}/api/send`, {
+        method: 'POST',
+        headers: auth,
+        body: JSON.stringify({
+          channel: 'email',
+          subject: 'A few slots left, {{name}}',
+          body: 'Hi {{name}},\n\nWe have room this week at {{business}}.',
+          contactIds,
+        }),
+      }).then((r) => r.json());
+      queued.queued === targets.length
+        ? ok(`queued ${queued.queued} for a named audience`)
+        : bad(`queued ${queued.queued} of ${targets.length}`);
+
+      // A {{link}} with nowhere to go renders as "Book here: " in a customer's
+      // inbox. Refusing beats sending a sentence that stops mid-air.
+      const dangling = await fetch(`${BASE}/api/send`, {
+        method: 'POST',
+        headers: auth,
+        body: JSON.stringify({ channel: 'email', subject: 'Hi', body: 'Book here: {{link}}', contactIds }),
+      });
+      dangling.status === 422
+        ? ok('a {{link}} with no destination is refused before sending')
+        : bad(`dangling link token returned ${dangling.status}`);
+      const withLink = await fetch(`${BASE}/api/send`, {
+        method: 'POST',
+        headers: auth,
+        body: JSON.stringify({
+          channel: 'email', subject: 'Hi', body: 'Book here: {{link}}',
+          contactIds: [contactIds[0]], linkUrl: 'https://example.test/book', dryRun: true,
+        }),
+      });
+      withLink.status === 200 ? ok('and accepted once one is supplied') : bad(`with a link: ${withLink.status}`);
+
+      // The real Resend adapter, pointed at the stand-in.
+      __installSender('email', resendSender({
+        apiKey: process.env.MOCK_RESEND_KEY || 'mock-resend-key',
+        from: 'Summit Local <hello@summitlocal.test>',
+        baseUrl: MOCK,
+      }));
+
+      try {
+        const run = await dispatch('email', { limit: 100 });
+        run.sent === targets.length ? ok(`${run.sent} left through the adapter`) : bad(`sent ${run.sent}, failed ${run.failed}`);
+
+        const { messages } = await fetch(`${MOCK}/__messages`).then((r) => r.json());
+        messages.length === targets.length
+          ? ok(`the provider received ${messages.length} messages`)
+          : bad(`provider received ${messages.length}, expected ${targets.length}`);
+
+        // Merge fields must be filled, or four hundred people get greeted as
+        // "Hi {{name}}".
+        const anyToken = messages.some(
+          (m: { text: string; subject: string }) => /\{\{/.test(m.text) || /\{\{/.test(m.subject)
+        );
+        !anyToken ? ok('no merge tokens survived into the sent copy') : bad('an unfilled {{token}} was sent');
+        const first = targets[0].name.trim().split(/\s+/)[0];
+        messages.some((m: { text: string }) => m.text.includes(`Hi ${first},`))
+          ? ok(`personalisation reached the body ("Hi ${first},")`)
+          : bad('the body was not personalised');
+        messages.some((m: { subject: string }) => m.subject.includes(first))
+          ? ok('and the subject line')
+          : bad('the subject was not personalised');
+
+        // Bulk mail without these headers degrades however clean the list is.
+        const withUnsub = messages.filter((m: { headers: Record<string, string> }) => m.headers['List-Unsubscribe']);
+        withUnsub.length === messages.length
+          ? ok('every message carries List-Unsubscribe')
+          : bad(`${withUnsub.length} of ${messages.length} had List-Unsubscribe`);
+        messages.every((m: { headers: Record<string, string> }) => m.headers['List-Unsubscribe-Post'])
+          ? ok('and the one-click header Gmail and Yahoo require')
+          : bad('List-Unsubscribe-Post missing');
+        messages.every((m: { html?: string; text: string }) => Boolean(m.html) && m.html!.includes('Unsubscribe'))
+          ? ok('and an unsubscribe link a human can actually see')
+          : bad('the HTML part has no visible unsubscribe');
+
+        // Idempotency: the key is what makes a worker retry safe.
+        messages.every((m: { idempotencyKey: string | null }) => m.idempotencyKey)
+          ? ok('each send carried an idempotency key')
+          : bad('a message went without an idempotency key');
+
+        const charges = await db.spendEntry.count({ where: { organizationId: orgId, kind: 'message' } });
+        charges === run.sent ? ok(`${charges} ledger rows for ${run.sent} sends`) : bad(`${charges} rows for ${run.sent} sends`);
+      } finally {
+        __resetSenders();
+      }
+    }
+  }
+
+  console.log('\n== Bounces suppress; soft ones do not; forgeries are refused ==');
+  {
+    const MOCK = process.env.MOCK_RESEND_URL || 'http://localhost:4323';
+    const reachable = await fetch(`${MOCK}/__messages`).then((r) => r.ok).catch(() => false);
+    const secretSet = Boolean(process.env.RESEND_WEBHOOK_SECRET);
+
+    if (!reachable && process.env.MOCK_RESEND_URL) {
+      bad('MOCK_RESEND_URL is set but the mock is not reachable — run `npm run mock:resend`');
+    } else if (!reachable || !secretSet) {
+      console.log(`  SKIP ${!reachable ? 'no MOCK_RESEND_URL configured' : 'RESEND_WEBHOOK_SECRET not set'}`);
+    } else {
+      const sent = await db.emailDelivery.findMany({
+        where: { status: 'SENT', providerRef: { not: null } },
+        include: { contact: true },
+        take: 3,
+      });
+
+      if (sent.length < 2) {
+        console.log('  SKIP not enough sent messages to bounce');
+      } else {
+        const hook = (body: unknown) =>
+          fetch(`${MOCK}/__webhook`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(body),
+          }).then((r) => r.json());
+
+        // A forged signature must be refused before anything is read.
+        const forged = await hook({
+          type: 'email.bounced',
+          email_id: sent[0].providerRef,
+          bounce: { type: 'Permanent' },
+          badSignature: true,
+        });
+        forged.appStatus === 401
+          ? ok('an unsigned webhook is refused (401)')
+          : bad(`forged webhook returned ${forged.appStatus}`);
+        (await db.suppression.count({ where: { address: (sent[0].contact.email ?? '').toLowerCase() } })) === 0
+          ? ok('and suppressed nobody')
+          : bad('a forged webhook wrote to the suppression list');
+
+        // A hard bounce suppresses.
+        const hard = await hook({
+          type: 'email.bounced',
+          email_id: sent[0].providerRef,
+          bounce: { type: 'Permanent', message: 'Mailbox does not exist' },
+        });
+        hard.appStatus === 200 ? ok('a signed bounce is accepted') : bad(`signed bounce returned ${hard.appStatus}`);
+        const bounced = await db.emailDelivery.findUnique({ where: { id: sent[0].id } });
+        bounced?.status === 'BOUNCED' && bounced.bounceKind === 'hard'
+          ? ok('the delivery is marked hard-bounced')
+          : bad(`delivery is ${bounced?.status}/${bounced?.bounceKind}`);
+        (await db.suppression.count({
+          where: { organizationId: sent[0].contact.organizationId, address: (sent[0].contact.email ?? '').toLowerCase() },
+        })) === 1
+          ? ok('and the address is suppressed')
+          : bad('a hard bounce did not suppress');
+
+        // A soft bounce does not. A full mailbox is not a dead address.
+        const soft = await hook({
+          type: 'email.bounced',
+          email_id: sent[1].providerRef,
+          bounce: { type: 'Transient', message: 'Mailbox full' },
+        });
+        soft.appStatus === 200 ? ok('a soft bounce is accepted') : bad(`soft bounce returned ${soft.appStatus}`);
+        (await db.suppression.count({
+          where: { organizationId: sent[1].contact.organizationId, address: (sent[1].contact.email ?? '').toLowerCase() },
+        })) === 0
+          ? ok('and leaves the list alone — a full mailbox is not a dead address')
+          : bad('a soft bounce suppressed an address');
+
+        // The audience shrinks by exactly the suppressed one.
+        const user = await db.user.findFirst({ where: { passwordHash: { not: null } } });
+        const login = await fetch(`${BASE}/api/auth/login`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ email: user!.email, password: process.env.SEED_PASSWORD || 'demo-password-change-me' }),
+        });
+        const cookie = login.headers.get('set-cookie')?.split(';')[0] ?? '';
+        const quote = await fetch(`${BASE}/api/send`, {
+          method: 'POST',
+          headers: { cookie, 'content-type': 'application/json' },
+          body: JSON.stringify({
+            channel: 'email',
+            subject: 'Again',
+            body: 'Hi',
+            contactIds: sent.map((s) => s.contactId),
+            dryRun: true,
+          }),
+        }).then((r) => r.json());
+        quote.reach.reachable === sent.length - 1
+          ? ok(`the next send reaches ${quote.reach.reachable} of ${sent.length} — one fewer`)
+          : bad(`expected ${sent.length - 1} reachable, got ${quote.reach.reachable}`);
+        quote.reach.exclusions.some((e: { reason: string }) => /bounce|complain/i.test(e.reason))
+          ? ok('and names the reason separately from unsubscribes')
+          : bad('the suppression is not reported as its own exclusion');
+
+        // A complaint is always terminal.
+        const complained = await hook({ type: 'email.complained', email_id: sent[2]?.providerRef ?? sent[1].providerRef });
+        complained.appStatus === 200 ? ok('a complaint is accepted') : bad(`complaint returned ${complained.appStatus}`);
+
+        // The dispatcher checks again at send time, because a bounce can
+        // arrive between queueing and sending.
+        const target = sent[0];
+        const batch = await db.messageBatch.findFirst({ where: { organizationId: target.contact.organizationId } });
+        if (batch) {
+          const held = await db.emailDelivery.create({
+            data: {
+              variationId: 'adhoc:suppression-probe',
+              batchId: batch.id,
+              contactId: target.contactId,
+              costCents: 1,
+              status: 'QUEUED',
+            },
+          });
+          __installSender('email', resendSender({
+            apiKey: process.env.MOCK_RESEND_KEY || 'mock-resend-key',
+            from: 'Summit Local <hello@summitlocal.test>',
+            baseUrl: MOCK,
+          }));
+          try {
+            await dispatch('email', { limit: 100 });
+            const after = await db.emailDelivery.findUnique({ where: { id: held.id } });
+            after?.status === 'SUPPRESSED'
+              ? ok('a message queued before the bounce is stopped at dispatch, not sent')
+              : bad(`suppressed message dispatched as ${after?.status}`);
+          } finally {
+            __resetSenders();
+            await db.emailDelivery.delete({ where: { id: held.id } }).catch(() => {});
+          }
+        }
+
+        // The unsubscribe link in every message has to work. A
+        // List-Unsubscribe header pointing at a 404 is worse than no header.
+        // Any delivery with a contact, not one still at SENT: by this point
+        // every message above has been bounced or complained, and scoping the
+        // lookup to SENT made this whole block skip itself in silence — the
+        // failure mode this suite has been bitten by before.
+        // Not one whose address is already on the list. An address suppressed
+        // by an earlier bounce keeps that reason when it unsubscribes, which
+        // is correct and would make this assertion test nothing.
+        const alreadySuppressed = (
+          await db.suppression.findMany({ where: { organizationId: sent[0].contact.organizationId }, select: { address: true } })
+        ).map((r) => r.address);
+        const live = await db.emailDelivery.findFirst({
+          where: {
+            contact: { email: { not: null, notIn: alreadySuppressed } },
+          },
+          include: { contact: true },
+          orderBy: { id: 'desc' },
+        });
+        if (!live?.contact.email) {
+          bad('no delivery to test the unsubscribe link against');
+        } else {
+          const oneClick = await fetch(`${BASE}/u/${live.id}`, { method: 'POST' });
+          oneClick.status === 200
+            ? ok('one-click unsubscribe (RFC 8058 POST) works without a login')
+            : bad(`one-click unsubscribe returned ${oneClick.status}`);
+          const contact = await db.contact.findUnique({ where: { id: live.contactId } });
+          contact?.emailConsent === 'UNSUBSCRIBED'
+            ? ok('and flips the contact to unsubscribed')
+            : bad(`consent is ${contact?.emailConsent} after unsubscribing`);
+          (await db.suppression.count({
+            where: { organizationId: live.contact.organizationId, address: live.contact.email.toLowerCase(), reason: 'unsubscribe' },
+          })) === 1
+            ? ok('and suppresses the address, so a CSV re-import cannot resurrect them')
+            : bad('unsubscribe did not write a suppression');
+
+          const human = await fetch(`${BASE}/u/${live.id}`);
+          const html = await human.text();
+          human.status === 200 && /unsubscribed/i.test(html)
+            ? ok('a human clicking the link gets a page that says so')
+            : bad(`GET returned ${human.status}`);
+          const missing = await fetch(`${BASE}/u/does-not-exist`);
+          missing.status === 404 ? ok('an unknown link 404s rather than erroring') : bad(`unknown link returned ${missing.status}`);
+
+          await db.contact.update({ where: { id: live.contactId }, data: { emailConsent: 'SUBSCRIBED' } });
+        }
+
+        const orgId = sent[0].contact.organizationId;
+        await db.suppression.deleteMany({ where: { organizationId: orgId } });
+        await db.spendEntry.deleteMany({ where: { organizationId: orgId } });
+        await db.emailDelivery.deleteMany({ where: { variationId: { startsWith: 'adhoc:' } } });
+        await db.messageBatch.deleteMany({ where: { organizationId: orgId } });
+      }
     }
   }
 

@@ -1,6 +1,8 @@
 import { db } from '../db';
 import { recordCharge } from '../billing';
 import { senderFor } from '../senders/registry';
+import { renderEmail, renderSubject } from '../senders/render';
+import { isSuppressed } from '../suppression';
 import type { OutboundMessage, SendChannel } from '../senders/types';
 
 /**
@@ -25,6 +27,8 @@ export interface DispatchResult {
   considered: number;
   sent: number;
   failed: number;
+  /** Dropped because the address is on the suppression list. */
+  suppressed: number;
   /** Left alone because nothing can send them yet. */
   held: number;
   chargedCents: number;
@@ -47,7 +51,7 @@ export async function dispatch(channel: SendChannel, opts: { limit?: number } = 
 
   const queued = await (table as typeof db.emailDelivery).findMany({
     where: { status: 'QUEUED' },
-    include: { contact: true },
+    include: { contact: true, batch: true },
     orderBy: { id: 'asc' },
     take: limit,
   });
@@ -57,6 +61,7 @@ export async function dispatch(channel: SendChannel, opts: { limit?: number } = 
     considered: queued.length,
     sent: 0,
     failed: 0,
+    suppressed: 0,
     held: 0,
     chargedCents: 0,
     note: null,
@@ -76,6 +81,8 @@ export async function dispatch(channel: SendChannel, opts: { limit?: number } = 
     return result;
   }
 
+  const appUrl = (process.env.APP_URL ?? 'http://localhost:3000').replace(/\/+$/, '');
+
   for (const row of queued) {
     const to = channel === 'email' ? row.contact.email : row.contact.phone;
     if (!to) {
@@ -84,10 +91,42 @@ export async function dispatch(channel: SendChannel, opts: { limit?: number } = 
       continue;
     }
 
+    // Checked again here, not only when the audience was built.
+    //
+    // A campaign queued on Monday can dispatch on Tuesday, and an address that
+    // bounced in between must not be mailed because the audience was computed
+    // before the bounce arrived. The composer's check keeps the quote honest;
+    // this one keeps the send safe, and it is the one that matters.
+    if (await isSuppressed(row.contact.organizationId, channel, to)) {
+      await (table as typeof db.emailDelivery).update({
+        where: { id: row.id },
+        data: { status: 'SUPPRESSED', failedAt: new Date(), failReason: 'Address is on the suppression list.' },
+      });
+      result.suppressed += 1;
+      continue;
+    }
+
+    if (!row.batch) {
+      await fail(channel, row.id, 'The message this belongs to is missing.');
+      result.failed += 1;
+      continue;
+    }
+
+    const ctx = {
+      businessName: row.batch.fromName ?? 'us',
+      unsubscribeBase: appUrl,
+      linkUrl: row.batch.linkUrl ?? undefined,
+    };
+    const recipient = { name: row.contact.name, email: to, deliveryId: row.id };
+    const rendered = renderEmail(row.batch, recipient, ctx);
+
     const message: OutboundMessage = {
       deliveryId: row.id,
       to,
-      body: '', // Phase 8 renders the body; the accounting does not depend on it.
+      subject: renderSubject(row.batch.subject, recipient, ctx),
+      body: channel === 'email' ? rendered.text : row.batch.body,
+      html: channel === 'email' ? rendered.html : undefined,
+      unsubscribeUrl: rendered.unsubscribeUrl,
       costCents: row.costCents,
       segments: 'segments' in row ? (row as { segments: number }).segments : undefined,
     };

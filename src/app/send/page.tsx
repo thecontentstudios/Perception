@@ -45,6 +45,7 @@ export default function SendPage() {
   const [setupPaid, setSetupPaid] = useState(false);
   const [domainVerified, setDomainVerified] = useState(true);
   const [hour, setHour] = useState(10);
+  const [linkUrl, setLinkUrl] = useState('https://greenscapelandscaping.example/book');
 
   const body = mode === 'email' ? emailBody : smsBody;
   const setBody = mode === 'email' ? setEmailBody : setSmsBody;
@@ -128,6 +129,7 @@ export default function SendPage() {
           subject,
           contactIds: reach.contacts.map((c) => c.id),
           brandId: brandId === 'all' ? undefined : brandId,
+          linkUrl,
           acknowledgeOverBudget,
         }),
       });
@@ -291,6 +293,23 @@ export default function SendPage() {
                 minSegments={smsRange?.min.segments ?? smsPreview.segments}
                 maxSegments={smsRange?.max.segments ?? smsPreview.segments}
               />
+            )}
+
+            {body.includes('{{link}}') && (
+              <div className="field" style={{ marginTop: 10, marginBottom: 0 }}>
+                <label htmlFor="linkUrl">Where {'{{link}}'} goes</label>
+                <input
+                  id="linkUrl"
+                  className="input"
+                  value={linkUrl}
+                  onChange={(e) => setLinkUrl(e.target.value)}
+                  placeholder="https://…"
+                />
+                <span className="hint">
+                  Shown only because the message uses the token. Without a destination the sentence around it stops
+                  mid-air.
+                </span>
+              </div>
             )}
 
             <div className="merge-hints">

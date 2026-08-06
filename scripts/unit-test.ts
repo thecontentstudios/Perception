@@ -14,6 +14,9 @@ import { reachFor, reachSummary } from '../src/lib/audience';
 import { humanWait, inGroup, outcomeSentence, routesFor } from '../src/lib/routes';
 import { CAPABILITIES, COMPARABLE } from '../src/lib/capabilities';
 import { allocateCents } from '../src/lib/billing';
+import { signResendWebhook, verifyResendSignature } from '../src/lib/senders/resend';
+import { renderEmail, renderSubject } from '../src/lib/senders/render';
+import { fillMergeFields } from '../src/lib/sms';
 import { ACCOUNTS, BRANDS, CONTACTS } from '../src/lib/demo-data';
 import type { Contact as ContactShape } from '../src/lib/types';
 
@@ -337,6 +340,99 @@ console.log('\n== Reach: who can actually be reached ==');
     ? ok('the reason pending consent is excluded is stated, with the penalty')
     : bad('no explanation for excluding pending SMS consent');
   reachSummary(sms).includes('1 of 5') ? ok('the summary leads with the shortfall') : bad('summary hides the gap: ' + reachSummary(sms));
+}
+
+/**
+ * Signature checks live in a function because this file compiles to CJS and
+ * cannot use a top-level await. Called from the chain at the bottom.
+ */
+async function webhookSignatureChecks() {
+  console.log('\n== Webhook signatures: the suppression list is not a public API ==');
+  {
+    const secret = 'whsec_' + Buffer.alloc(24, 3).toString('base64');
+    const body = JSON.stringify({ type: 'email.bounced', data: { email_id: 'abc' } });
+    const id = 'msg_test';
+    const now = Math.floor(Date.now() / 1000);
+    const sig = await signResendWebhook(secret, id, now, body);
+
+    const good = await verifyResendSignature(secret, { id, timestamp: String(now), signature: sig }, body);
+    good.ok ? ok('a correctly signed payload verifies') : bad(`valid signature rejected: ${good.reason}`);
+
+    const tampered = await verifyResendSignature(
+      secret,
+      { id, timestamp: String(now), signature: sig },
+      body.replace('abc', 'xyz')
+    );
+    !tampered.ok ? ok('changing one byte of the body invalidates it') : bad('a tampered body verified');
+
+    const wrongKey = await verifyResendSignature(
+      'whsec_' + Buffer.alloc(24, 9).toString('base64'),
+      { id, timestamp: String(now), signature: sig },
+      body
+    );
+    !wrongKey.ok ? ok('another secret does not verify') : bad('the wrong secret verified');
+
+    // Replay window: a captured payload must not stay valid forever, or a
+    // replayed bounce re-suppresses an address the owner has re-subscribed.
+    const old = now - 3600;
+    const oldSig = await signResendWebhook(secret, id, old, body);
+    const stale = await verifyResendSignature(secret, { id, timestamp: String(old), signature: oldSig }, body);
+    !stale.ok && /replay|window/i.test(stale.reason ?? '')
+      ? ok('an hour-old payload is outside the replay window')
+      : bad(`stale payload: ${stale.ok} ${stale.reason}`);
+
+    const missing = await verifyResendSignature(secret, { id: null, timestamp: null, signature: null }, body);
+    !missing.ok ? ok('no headers, no verification') : bad('an unsigned payload verified');
+
+    // More than one signature can be valid while a secret is rotating.
+    const rotated = await verifyResendSignature(
+      secret,
+      { id, timestamp: String(now), signature: `v1,AAAA ${sig}` },
+      body
+    );
+    rotated.ok ? ok('a rotating secret can present several signatures') : bad('rotation broke verification');
+  }
+}
+
+console.log('\n== Rendering: what the recipient actually gets ==');
+{
+  const to = { name: 'Marcus Webb', email: 'marcus@example.com', deliveryId: 'del_123' };
+  const ctx = { businessName: 'GreenScape', unsubscribeBase: 'https://app.example.com' };
+  const out = renderEmail({ subject: 'Hi {{name}}', body: 'Hi {{name}},\n\nBook with {{business}}.' }, to, ctx);
+
+  !/\{\{/.test(out.text) ? ok('no merge tokens survive into the text part') : bad(`token left: ${out.text}`);
+  !/\{\{/.test(out.html) ? ok('nor the html part') : bad('token left in html');
+  out.text.includes('Hi Marcus,') ? ok('first name only, as written') : bad(`got: ${out.text.slice(0, 40)}`);
+  out.text.includes('GreenScape') ? ok('business name filled') : bad('business not filled');
+
+  eq(renderSubject('Hi {{name}}', to, ctx), 'Hi Marcus', 'the subject is personalised too');
+
+  // A typo'd token must not reach a recipient. The composer still shows it —
+  // there the reader is the writer, and they should see their own mistake.
+  const unknown = renderEmail({ subject: null, body: 'Hello {{name}} {{naem}}' }, to, ctx);
+  !unknown.text.includes('{{naem}}') && unknown.text.includes('Marcus')
+    ? ok('a typo\u2019d merge token is stripped before sending, not shown to a customer')
+    : bad(`unknown token survived: ${unknown.text.slice(0, 60)}`);
+  fillMergeFields('Hi {{naem}}', {}).includes('{{naem}}')
+    ? ok('while the composer still shows it, because there the reader is the writer')
+    : bad('the composer would hide a typo from the person who made it');
+
+  out.unsubscribeUrl === 'https://app.example.com/u/del_123'
+    ? ok('the unsubscribe link points at this exact delivery')
+    : bad(`unsubscribe url: ${out.unsubscribeUrl}`);
+  out.text.includes(out.unsubscribeUrl) && out.html.includes(out.unsubscribeUrl)
+    ? ok('and appears in both parts, so no client hides it')
+    : bad('unsubscribe missing from a part');
+
+  // A contact name is user input and reaches an HTML document.
+  const nasty = renderEmail(
+    { subject: null, body: 'Hi {{name}}' },
+    { name: '<script>alert(1)</script>', email: 'x@example.com', deliveryId: 'd' },
+    ctx
+  );
+  !nasty.html.includes('<script>') && nasty.html.includes('&lt;script&gt;')
+    ? ok('a contact name is escaped before it reaches the html')
+    : bad('html injection through a contact name');
 }
 
 console.log('\n== Allocating a total across messages ==');
@@ -727,7 +823,9 @@ async function readPathChecks() {
   }
 }
 
-readPathChecks().then(() => {
+webhookSignatureChecks()
+  .then(readPathChecks)
+  .then(() => {
   console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL UNIT CHECKS PASSED');
   process.exit(failures ? 1 : 0);
 });

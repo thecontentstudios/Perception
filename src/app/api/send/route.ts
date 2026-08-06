@@ -7,6 +7,7 @@ import { checkQuietHours, previewRange, previewSms } from '@/lib/sms';
 import { EMAIL_RATES, SMS_RATES } from '@/lib/pricing';
 import { sendingStatus } from '@/lib/senders/registry';
 import { allocateCents, spendSplit } from '@/lib/billing';
+import { normalizeAddress, suppressedAmong } from '@/lib/suppression';
 import type { Contact } from '@/lib/types';
 import { budgetScope, monthKey } from '../spend/route';
 
@@ -38,6 +39,8 @@ interface SendRequest {
   acknowledgeOverBudget?: boolean;
   /** ISO time to send at; omitted means now. */
   sendAt?: string;
+  /** Where `{{link}}` points. Required when the body uses the token. */
+  linkUrl?: string;
 }
 
 /** Row → the domain shape `reachFor` expects. */
@@ -84,6 +87,16 @@ export async function POST(req: Request) {
       throw new HttpError(400, 'An email needs a subject line.');
     }
 
+    // A `{{link}}` with nothing behind it renders as "Book here: " — a
+    // sentence that stops mid-air in a customer's inbox. The composer offers
+    // the token as a chip, so it is easy to insert and easy to forget to point
+    // anywhere, which makes refusing here the difference between a caught
+    // mistake and a campaign nobody can act on.
+    const linkUrl = (body.linkUrl ?? '').trim() || null;
+    if (/\{\{link\}\}/.test(text) && !linkUrl) {
+      throw new HttpError(422, 'This message contains {{link}} but no link to send people to. Add one, or take the token out.');
+    }
+
     // Audience. Ids are filtered through the organization, so a borrowed id
     // from another tenant simply is not in the result — no 403 to probe.
     const contacts = (
@@ -97,6 +110,30 @@ export async function POST(req: Request) {
     ).map(toContact);
 
     const reach = reachFor(contacts, body.channel);
+
+    // Suppression is applied after consent, and reported as its own exclusion.
+    //
+    // Folding it into "unsubscribed" would be close enough to true and wrong
+    // in the way that matters: an owner looking at a shrinking audience needs
+    // to know whether people opted out or whether their mail is bouncing,
+    // because those call for completely different responses.
+    const suppressedSet = await suppressedAmong(
+      principal.organizationId,
+      body.channel,
+      reach.contacts.map((c) => (body.channel === 'email' ? c.email : (c.phone ?? '')))
+    );
+    if (suppressedSet.size > 0) {
+      const before = reach.contacts.length;
+      reach.contacts = reach.contacts.filter(
+        (c) => !suppressedSet.has(normalizeAddress(body.channel === 'email' ? c.email : (c.phone ?? '')))
+      );
+      reach.reachable = reach.contacts.length;
+      reach.exclusions.push({
+        reason: body.channel === 'email' ? 'Bounced or complained' : 'Undeliverable',
+        count: before - reach.contacts.length,
+        fix: 'These addresses are suppressed to protect your sending reputation. Re-mailing them would push the rest of your campaigns towards the spam folder.',
+      });
+    }
 
     const settings = await organizationSettings(principal.organizationId);
     const sentThisMonth = await emailSentThisMonth(principal.organizationId);
@@ -252,10 +289,28 @@ export async function POST(req: Request) {
     // `dispatch()`, when a provider hands back a reference. Until then the
     // money is *committed*, which `/spend` reports as its own figure.
     const written = await db.$transaction(async (tx) => {
+      // The message itself, stored once. The dispatcher renders per recipient
+      // from this row — Phase 7 queued deliveries with a price and no content,
+      // which was fine while nothing could send them.
+      const batch = await tx.messageBatch.create({
+        data: {
+          organizationId: principal.organizationId,
+          brandId: body.brandId ?? null,
+          channel: body.channel.toUpperCase() as never,
+          variationId,
+          subject: body.channel === 'email' ? (body.subject ?? '').trim() : null,
+          body: text,
+          fromName: settings.businessName,
+          fromEmail: settings.fromEmail,
+          linkUrl,
+        },
+      });
+
       if (body.channel === 'sms' && smsPreview) {
         await tx.smsDelivery.createMany({
           data: reach.contacts.map((c, i) => ({
             variationId,
+            batchId: batch.id,
             contactId: c.id,
             segments: smsPreview!.segments,
             encoding: smsPreview!.encoding,
@@ -267,6 +322,7 @@ export async function POST(req: Request) {
         await tx.emailDelivery.createMany({
           data: reach.contacts.map((c, i) => ({
             variationId,
+            batchId: batch.id,
             contactId: c.id,
             costCents: perMessage[i] ?? 0,
             status: 'QUEUED' as const,
@@ -323,6 +379,7 @@ async function organizationSettings(organizationId: string): Promise<{
   paidFixedCostIds: string[];
   utcOffsetHours: number;
   businessName: string;
+  fromEmail: string | null;
 }> {
   const org = await db.organization.findUnique({ where: { id: organizationId }, select: { name: true } });
   const accounts = await db.connectedAccount.findMany({
@@ -347,6 +404,7 @@ async function organizationSettings(organizationId: string): Promise<{
     paidFixedCostIds: paid,
     utcOffsetHours: -7,
     businessName: org?.name ?? 'our business',
+    fromEmail: process.env.RESEND_FROM ?? null,
   };
 }
 

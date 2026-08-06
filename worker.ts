@@ -63,8 +63,10 @@ async function scan() {
     // provider; failed work has to be composed again, and turning a setup gap
     // into lost work would be the wrong trade.
     for (const d of await dispatchAll()) {
-      if (d.sent > 0 || d.failed > 0) {
-        log(`dispatch ${d.channel}: ${d.sent} sent, ${d.failed} failed, ${d.chargedCents}c charged`);
+      if (d.sent > 0 || d.failed > 0 || d.suppressed > 0) {
+        log(
+          `dispatch ${d.channel}: ${d.sent} sent, ${d.failed} failed, ${d.suppressed} suppressed, ${d.chargedCents}c charged`
+        );
       } else if (d.note && d.held !== lastHeld[d.channel]) {
         // Say it when the number changes, not every thirty seconds forever.
         log(`dispatch ${d.channel}: ${d.note}`);
