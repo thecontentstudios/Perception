@@ -30,6 +30,7 @@ interface Entry {
 /** Things people call these screens that aren't in the label. */
 const ALIASES: Record<string, string> = {
   '/': 'dashboard today priorities overview',
+  '/advertise': 'start advertising options routes channels what should i do how much cheapest reach capabilities compare',
   '/campaigns': 'projects promotions',
   '/calendar': 'schedule month week planner',
   '/post': 'publish now compose quick',

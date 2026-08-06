@@ -755,3 +755,107 @@ contradicted the data behind them. The list is now generated to a realistic size
 and distribution from a fixed seed, and segment counts are derived from
 membership rather than declared — a number the UI states confidently and the data
 contradicts is the exact failure this product exists to avoid.
+
+---
+
+## Phase 6 — The pathway: one screen that answers "what should I do?"
+
+*Requested as: "an easy pathway to advertisement with text advertisements and
+email campaigns and everything possible with easy to understand pricing and
+connections and capabilities."*
+
+Phase 5 made every number correct. It did not make any of them **easy**, and
+those are different problems. An owner could learn what an SMS segment costs on
+one screen and, on another, that 308 of their contacts may legally be texted —
+and nowhere could they learn that texting those 308 costs $3.39 and cannot start
+for six days. The facts were all present and the answer was not.
+
+### 6.1 — Routes (`src/lib/routes.ts`)
+
+A **route** is one way to reach a customer, made comparable: cost to run, cost
+to set up, hours until the first message can go out, what it reaches, and what
+stands in the way. Comparable is the hard part.
+
+### 6.2 — The mistake this file made first
+
+The first version sorted every route into one list by cost per person. It put
+**X ads second, above texting your own customers**, by comparing 105,000
+*impressions* against 308 *delivered texts* as if those were the same unit.
+
+They are not the same unit, and a single sorted list silently asserted that
+they were. This is the identical error to the one Phase 5 was built to
+prevent — a tidy number that averages away a distinction the customer needs —
+committed by the file that was supposed to be applying the lesson.
+
+So routes are grouped by what the money actually buys, and **sorting happens
+within a group, never across one**:
+
+| Group | You buy | Certainty |
+|---|---|---|
+| **Owned** | A message delivered to someone on your list | Exact |
+| **Reach** | Impressions at auction | Estimated |
+| **Intent** | Visits at auction | Estimated |
+
+Views convert to people only by dividing by frequency — `IMPRESSIONS_PER_PERSON`
+is 2–4, stated by name rather than buried in a calculation — and the result is
+always smaller than the view count. For a search ad, `peopleLow`/`peopleHigh`
+are **null**: the impressions behind a click are free and uncounted, so nobody
+knows how many people saw it, and a dash is the correct answer.
+
+### 6.3 — The second mistake: ranking on the measurable number
+
+With units fixed, the paid list ranked by price — which put **Snapchat at the
+top for a landscaping business**, because Snapchat sells the cheapest views.
+Cheap views of the wrong people are not cheap; they are wasted.
+
+Fit now comes before price, taken from the surface landscape built in Phase 2
+and **shown on the card** so the reordering is something an owner can see and
+disagree with rather than a silent thumb on the scale. A landscaper gets
+Facebook, Instagram and Nextdoor; a software company gets X and Reddit.
+
+Across a mixed workspace fit is the **mean**, not the maximum. Taking the
+maximum — the obvious first implementation — marked every channel "Essential",
+because almost any channel is essential to somebody, and a column where every
+cell says the same thing carries no information at all.
+
+### 6.4 — Capabilities (`src/lib/capabilities.ts`)
+
+"Everything possible", made concrete. A capability matrix full of green ticks
+is the least informative shape it could take: the ticks are the things everyone
+assumed anyway. So the ticks are deliberately quiet and the **no** cells carry
+the colour, because those are the ones that turn into a campaign somebody has
+to rebuild:
+
+- a link in an Instagram caption is not clickable
+- video does not play in Gmail or Outlook
+- a picture in a text is an MMS at roughly ten times the price
+- organic reach on a Facebook Page is low single-digit percent of followers
+
+Each channel also carries the thing that most surprises a first-time user,
+which no vendor's own feature list will ever contain.
+
+### 6.5 — The screen (`/advertise`)
+
+Deliberately **not a funnel**. There is no "get started" that hides the price
+until step four. The page opens with a recommendation and says why it is the
+recommendation; every route shows cost, wait and blockers at once; and each
+blocker is a step with a price, a realistic wait, and somewhere to go — not a
+sentence that dead-ends.
+
+Paid groups are shortlisted to four with the tail folded behind a count.
+Dropping the rest silently would be its own kind of dishonesty.
+
+*Easy does not mean fewer facts. It means the facts arranged so the decision is
+obvious.*
+
+### What the tests caught
+
+**Every channel said "Essential fit."** See 6.3 — `Math.max` across four
+industries. The test that catches it asserts a mixed workspace still produces
+more than one distinct fit value.
+
+**Postgres died between turns and the badge was right.** A screenshot showed
+"Demo data" while the reach figures looked database-shaped. The badge was
+telling the truth: the database was down and the fixtures happened to agree,
+because the seed is generated from the same fixture file. Worth recording
+because the instinct was to distrust the indicator rather than check it.

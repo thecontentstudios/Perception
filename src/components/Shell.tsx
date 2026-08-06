@@ -44,6 +44,11 @@ const NAV_SECTIONS: { label: string; items: NavItem[] }[] = [
     label: 'Plan',
     items: [
       { href: '/', label: 'Home', d: 'M3 10.5L12 3l9 7.5M5.5 8.5V21h13V8.5' },
+      {
+        href: '/advertise',
+        label: 'Ways to reach people',
+        d: 'M3 11l18-7-7 18-2.5-8.5L3 11z M12 12l9-8',
+      },
       { href: '/campaigns', label: 'Campaigns', d: 'M4 15V4l16 4-16 4m0 3v6m0-6l7 5' },
       { href: '/calendar', label: 'Calendar', d: 'M4 6h16v15H4zM4 10h16M8 3v4m8-4v4' },
       { href: '/post', label: 'Quick Post', d: 'M4 12l16-8-6 16-2.5-6.5L4 12z' },

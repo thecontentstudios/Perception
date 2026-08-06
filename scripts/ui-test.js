@@ -148,7 +148,7 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
   // scrollbar on every screen.
   for (const [w, h] of [[1920, 1080], [1280, 900], [900, 800], [760, 900], [600, 800]]) {
     await page.setViewportSize({ width: w, height: h });
-    for (const route of ['/hud', '/calendar', '/analytics', '/contacts', '/media', '/send', '/spend']) {
+    for (const route of ['/hud', '/calendar', '/analytics', '/contacts', '/media', '/send', '/spend', '/advertise']) {
       await page.goto('http://localhost:3000' + route, { waitUntil: 'networkidle' });
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 2);
       overflow ? bad(`horizontal overflow on ${route} at ${w}px`) : ok(`no overflow ${route} @ ${w}px`);
@@ -1233,6 +1233,97 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
   totalBefore !== totalAfter
     ? ok(`raising a daily budget moves the total (${totalBefore} \u2192 ${totalAfter})`)
     : bad('total did not react to the budget slider');
+
+  console.log('\n== 22. The pathway ranks, groups, and never mixes units ==');
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await page.goto('http://localhost:3000/advertise', { waitUntil: 'networkidle' });
+  await page.waitForTimeout(600);
+
+  // It takes a position rather than presenting a grid of equal choices.
+  const headline = await page.$eval('.headline-route h2', (e) => e.textContent.trim()).catch(() => null);
+  headline ? ok('the page opens with a recommendation: ' + headline) : bad('no headline route');
+  const headlineCost = await page.$eval('.hr-cost', (e) => e.textContent.trim()).catch(() => '');
+  /free|\$|\u00a2/.test(headlineCost) ? ok('and it carries its price: ' + headlineCost) : bad('headline has no price');
+
+  // Three groups, each internally consistent about what it sells.
+  const groupHeads = await page.$$eval('.rg-head h3', (n) => n.map((e) => e.textContent.trim()));
+  groupHeads.length >= 4 ? ok(`${groupHeads.length} sections: ${groupHeads.join(' / ')}`) : bad('groups missing: ' + groupHeads.join(','));
+
+  // The unit words must not be mixed inside one group's cost column.
+  const groupUnits = await page.$$eval('.route-group', (sections) =>
+    sections.map((s) => {
+      const costs = [...s.querySelectorAll('.rc-cost')].map((e) => e.textContent);
+      return {
+        head: s.querySelector('h3')?.textContent?.trim() ?? '',
+        views: costs.filter((c) => /views/.test(c)).length,
+        visits: costs.filter((c) => /visits/.test(c)).length,
+        people: costs.filter((c) => /people/.test(c)).length,
+      };
+    })
+  );
+  const mixed = groupUnits.filter((g) => [g.views, g.visits, g.people].filter((n) => n > 0).length > 1);
+  mixed.length === 0
+    ? ok('no section mixes views, visits and people in one column')
+    : bad('a section mixes units: ' + JSON.stringify(mixed));
+
+  // Paid sections are shortlisted rather than dumped.
+  const more = await page.$('button:has-text("fit less well")');
+  if (more) {
+    const before = await page.$$eval('.route-card', (n) => n.length);
+    await more.click();
+    await page.waitForTimeout(300);
+    const after = await page.$$eval('.route-card', (n) => n.length);
+    after > before ? ok(`shortlisted ${before}, expands to ${after}`) : bad('show-more revealed nothing');
+  } else bad('no way to see the routes below the shortlist');
+
+  // Every route states when it can start, and the slow one says so.
+  const whens = await page.$$eval('.rc-when', (n) => n.map((e) => e.textContent.trim()));
+  whens.length > 0 && whens.every((w) => w.length > 0)
+    ? ok('every route says when it can start')
+    : bad('a route has no start time');
+  whens.some((w) => /days|weeks/.test(w))
+    ? ok('and the slow ones are honest about it: ' + whens.find((w) => /days|weeks/.test(w)))
+    : bad('nothing reports a multi-day wait — SMS registration should');
+
+  // Expanding a route that needs setup shows real steps with costs.
+  const cards = await page.$$('.route-card');
+  let opened = false;
+  for (const c of cards) {
+    const name = await c.$eval('.rc-name', (e) => e.textContent).catch(() => '');
+    if (/Text your list/.test(name)) {
+      await c.$eval('.rc-head', (e) => e.click());
+      opened = true;
+      break;
+    }
+  }
+  await page.waitForTimeout(350);
+  if (!opened) bad('could not find the SMS route');
+  else {
+    const steps = await page.$$eval('.rc-steps li', (n) => n.length);
+    steps >= 3 ? ok(`${steps} setup steps listed for texting`) : bad('setup steps missing: ' + steps);
+    const costs = await page.$$eval('.rc-steps .st-meta', (n) => n.map((e) => e.textContent.trim()));
+    costs.some((c) => /\$44/.test(c)) ? ok('the $44 registration is on screen: ' + costs.join(' | ')) : bad('registration cost hidden: ' + costs.join(' | '));
+    const go = await page.$$('.rc-steps .st-go');
+    go.length > 0 ? ok(`${go.length} steps have somewhere to go`) : bad('setup steps are prose with no action');
+  }
+
+  console.log('\n== 23. Capability matrix: the "no" cells carry the signal ==');
+  const noCells = await page.$$eval('.cap-cell.no', (n) => n.length);
+  const yesCells = await page.$$eval('.cap-cell.yes', (n) => n.length);
+  noCells > 0 && yesCells > 0 ? ok(`${yesCells} yes, ${noCells} no`) : bad(`matrix looks wrong: ${yesCells} yes / ${noCells} no`);
+
+  // A yes must be quieter than a no, or the table is a wall of ticks.
+  const capWeights = await page.evaluate(() => {
+    const y = document.querySelector('.cap-cell.yes span');
+    const n = document.querySelector('.cap-cell.no span');
+    return y && n ? [getComputedStyle(y).fontWeight, getComputedStyle(n).fontWeight] : null;
+  });
+  capWeights && Number(capWeights[1]) > Number(capWeights[0])
+    ? ok(`a "no" is set heavier than a "yes" (${capWeights[1]} vs ${capWeights[0]})`)
+    : bad('yes and no share a weight: ' + JSON.stringify(capWeights));
+
+  const surprises = await page.$$eval('.cn-teaser', (n) => n.length);
+  surprises >= 8 ? ok(`${surprises} channels carry their first-time surprise`) : bad('surprises missing: ' + surprises);
 
   console.log('\n' + (errors.length ? 'PAGE ERRORS:\n' + errors.join('\n') : 'no page errors'));
   console.log(fail.length ? `\n${fail.length} FAILURE(S)` : '\nALL CHECKS PASSED');

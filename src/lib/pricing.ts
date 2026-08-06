@@ -183,6 +183,22 @@ export interface AdRate {
 }
 
 /**
+ * How many times one person sees an ad over a typical two-week local flight.
+ *
+ * This exists because **an impression is not a person**, and forgetting that
+ * is the most common way an advertising forecast overstates itself by 3×. A
+ * $210 Facebook flight buying 30,000 impressions has not reached 30,000
+ * people; it has reached somewhere around 10,000 of them three times each.
+ *
+ * The number is an assumption, not a measurement, so it is a range and it
+ * lives here under its own name rather than buried as a magic constant in a
+ * calculation. Small local audiences saturate quickly and see an ad more
+ * often; broad national ones less. Anyone who knows their own frequency
+ * should replace this.
+ */
+export const IMPRESSIONS_PER_PERSON = { low: 2, high: 4 };
+
+/**
  * Ranges, never points.
  *
  * These are wide on purpose. A Facebook CPM genuinely varies 3× between a

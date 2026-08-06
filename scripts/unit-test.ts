@@ -11,6 +11,9 @@ import { countSegments, encodingOf, previewSms, proposeDowngrade, checkQuietHour
 import { checkBudget, forecastMonth, projectAds, projectEmail, projectSms } from '../src/lib/projection';
 import { amount, money, range } from '../src/lib/pricing';
 import { reachFor, reachSummary } from '../src/lib/audience';
+import { humanWait, inGroup, outcomeSentence, routesFor } from '../src/lib/routes';
+import { CAPABILITIES, COMPARABLE } from '../src/lib/capabilities';
+import { ACCOUNTS, BRANDS, CONTACTS } from '../src/lib/demo-data';
 import type { Contact as ContactShape } from '../src/lib/types';
 
 let failures = 0;
@@ -333,6 +336,119 @@ console.log('\n== Reach: who can actually be reached ==');
     ? ok('the reason pending consent is excluded is stated, with the penalty')
     : bad('no explanation for excluding pending SMS consent');
   reachSummary(sms).includes('1 of 5') ? ok('the summary leads with the shortfall') : bad('summary hides the gap: ' + reachSummary(sms));
+}
+
+console.log('\n== Routes: three units that must never be averaged ==');
+{
+  const contacts = CONTACTS;
+  const routes = routesFor({ contacts, accounts: ACCOUNTS, industries: ['landscaping'] });
+
+  // Every route reports its outcome in the unit the platform actually sells.
+  const units = new Set(routes.map((r) => r.outcome.unit));
+  units.has('people') && units.has('views') && units.has('visits')
+    ? ok('all three units present: delivered messages, views, visits')
+    : bad(`missing a unit: ${[...units].join(', ')}`);
+
+  const cpm = routes.find((r) => r.id === 'ads:facebook');
+  const cpc = routes.find((r) => r.id === 'ads:google_business');
+  const email = routes.find((r) => r.id === 'email');
+  eq(cpm?.outcome.unit, 'views', 'a CPM channel sells views, not people');
+  eq(cpc?.outcome.unit, 'visits', 'a CPC channel sells visits');
+  eq(email?.outcome.unit, 'people', 'an email reaches people, exactly');
+  eq(email?.outcome.certainty, 'exact', 'and that count is exact, not estimated');
+  eq(cpm?.outcome.certainty, 'estimated', 'an auction outcome never claims to be exact');
+
+  // Views convert to people only by dividing by frequency, and the result is
+  // strictly smaller than the view count. This is the check that would catch
+  // impressions being passed off as people.
+  cpm && cpm.peopleHigh !== null && cpm.peopleHigh < cpm.outcome.high
+    ? ok(`views (${cpm.outcome.high.toLocaleString('en-US')}) exceed people (${cpm.peopleHigh.toLocaleString('en-US')}) — the same person sees it more than once`)
+    : bad('impressions were reported as people');
+
+  // For a search ad nobody knows how many people saw it, so we do not say.
+  cpc?.peopleLow === null && cpc?.peopleHigh === null
+    ? ok('a search ad reports no people figure, because nobody has one')
+    : bad(`invented a people figure for CPC: ${cpc?.peopleLow}-${cpc?.peopleHigh}`);
+
+  // Sorting happens within a group only.
+  for (const g of ['owned', 'reach', 'intent'] as const) {
+    const rs = inGroup(routes, g);
+    const sameUnit = new Set(rs.map((r) => r.outcome.unit)).size <= 1;
+    sameUnit ? ok(`the "${g}" group is internally comparable`) : bad(`group ${g} mixes units`);
+  }
+}
+
+console.log('\n== Routes: the ranking has an opinion, and it is defensible ==');
+{
+  const routes = routesFor({ contacts: CONTACTS, accounts: ACCOUNTS, industries: ['landscaping'] });
+  const owned = inGroup(routes, 'owned');
+  owned[0]?.id === 'email'
+    ? ok('the list you already own comes first')
+    : bad(`owned group led by ${owned[0]?.id}`);
+
+  // Fit beats price, or a landscaper gets told to buy Snapchat.
+  const reach = inGroup(routes, 'reach');
+  const top = reach[0];
+  const cheapest = [...reach].sort((a, b) => a.costPerUnitCents - b.costPerUnitCents)[0];
+  top && cheapest && top.fit >= cheapest.fit
+    ? ok(`ranked ${top.name} (${top.fitLabel}) above the cheapest ${cheapest.name} (${cheapest.fitLabel})`)
+    : bad('price beat fit in the ranking');
+
+  // And the ranking genuinely changes with the business.
+  const soft = inGroup(routesFor({ contacts: CONTACTS, accounts: ACCOUNTS, industries: ['software'] }), 'reach');
+  soft[0]?.id !== reach[0]?.id
+    ? ok(`different industries get different answers (${reach[0]?.name} vs ${soft[0]?.name})`)
+    : bad('every industry gets the same ranking — fit is not being applied');
+
+  // Averaging across a mixed workspace must not mark everything essential.
+  const mixed = inGroup(
+    routesFor({ contacts: CONTACTS, accounts: ACCOUNTS, industries: BRANDS.map((b) => b.industry) }),
+    'reach'
+  );
+  new Set(mixed.map((r) => r.fit)).size > 1
+    ? ok('a mixed workspace still separates good fits from bad')
+    : bad('every channel got the same fit across a mixed workspace');
+}
+
+console.log('\n== Routes: setup is stated before it is a surprise ==');
+{
+  const routes = routesFor({ contacts: CONTACTS, accounts: ACCOUNTS, industries: ['landscaping'] });
+  const sms = routes.find((r) => r.id === 'sms')!;
+  sms.setupCents > 5000 ? ok(`texting costs ${sms.setupCents}c to start`) : bad(`SMS setup understated: ${sms.setupCents}c`);
+  sms.timeToFirstSendHours > 100
+    ? ok(`and cannot start for ${humanWait(sms.timeToFirstSendHours)}`)
+    : bad(`SMS wait understated: ${sms.timeToFirstSendHours}h`);
+  sms.steps.every((s) => s.detail.length > 20) ? ok('every setup step explains itself') : bad('a setup step has no explanation');
+
+  const email = routes.find((r) => r.id === 'email')!;
+  eq(email.setupCents, 0, 'email costs nothing to set up');
+
+  // Organic refuses to invent a reach figure.
+  const organic = routes.find((r) => r.id === 'organic')!;
+  eq(organic.peopleLow, null, 'organic reach is not a number anybody has');
+  /nobody can tell you/i.test(outcomeSentence(organic))
+    ? ok('and the screen says so rather than showing a zero')
+    : bad(`organic outcome reads: ${outcomeSentence(organic)}`);
+}
+
+console.log('\n== Capabilities: the useful cells are the ones that say no ==');
+{
+  const nos = COMPARABLE.map((c) => CAPABILITIES[c]!).filter(Boolean);
+  eq(nos.length, COMPARABLE.length, 'every comparable channel has a capability entry');
+
+  // The three that catch people out, asserted by name.
+  eq(CAPABILITIES.instagram?.links, 'limited', 'an Instagram caption link is not fully clickable');
+  eq(CAPABILITIES.sms?.video, 'no', 'a text message cannot carry video');
+  eq(CAPABILITIES.email?.personalisation, 'yes', 'email personalises per recipient');
+  eq(CAPABILITIES.facebook?.personalisation, 'no', 'a social post does not');
+  eq(CAPABILITIES.sms?.maxCharacters, 160, 'the SMS limit is the segment boundary');
+
+  nos.every((c) => c.surprise.length > 30)
+    ? ok('every channel carries the thing that surprises first-time users')
+    : bad('a channel has no surprise note');
+  nos.every((c) => c.targeting.length > 20 && c.measurement.length > 20)
+    ? ok('every channel says who you can reach and what you can measure')
+    : bad('a channel is missing targeting or measurement detail');
 }
 
 /**

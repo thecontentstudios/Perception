@@ -3329,3 +3329,518 @@ button.nav-section-label:hover {
   background: rgba(208, 59, 59, 0.08);
   color: var(--st-critical);
 }
+
+/* ------------------------------------------------------------ advertise */
+
+/* The answer, before the options. A screen that opens with a grid of equal
+   choices has made the owner do the ranking; this one takes a position and
+   says why, and everything below it is the working. */
+.headline-route {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  padding: 16px 18px;
+  margin-bottom: 14px;
+  border-color: var(--accent);
+  background: linear-gradient(180deg, var(--accent-soft), transparent 70%);
+}
+
+@media (max-width: 720px) {
+  .headline-route {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.hr-tag {
+  grid-column: 1 / -1;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.headline-route h2 {
+  font-size: 21px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 0 0 2px;
+}
+
+.hr-what {
+  font-size: 12.5px;
+  color: var(--ink-2);
+  margin: 0 0 8px;
+}
+
+.hr-numbers {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: baseline;
+  margin-bottom: 8px;
+}
+
+.hr-cost {
+  font-size: 17px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.hr-when {
+  font-size: 12px;
+  color: var(--ink-2);
+  font-weight: 600;
+}
+
+.hr-why {
+  font-size: 11.5px;
+  color: var(--muted);
+  line-height: 1.55;
+  margin: 0;
+  max-width: 72ch;
+}
+
+.hr-go {
+  white-space: nowrap;
+}
+
+.budget-strip {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+
+.budget-strip label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--ink-2);
+  min-width: 260px;
+  flex: 1;
+}
+
+.budget-strip b {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.budget-strip input[type='range'] {
+  accent-color: var(--accent);
+  width: 100%;
+}
+
+.budget-strip p {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 0;
+  flex: 1;
+  min-width: 240px;
+}
+
+.route-group {
+  margin-bottom: 22px;
+}
+
+.rg-head {
+  margin-bottom: 10px;
+}
+
+.rg-head h3 {
+  font-size: 14px;
+  font-weight: 700;
+  margin: 0 0 3px;
+}
+
+.rg-head p {
+  font-size: 11.5px;
+  color: var(--muted);
+  line-height: 1.55;
+  margin: 0;
+  max-width: 78ch;
+}
+
+.routes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.route-card {
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: 10px 13px;
+}
+
+.route-card.unavailable {
+  opacity: 0.62;
+}
+
+.rc-head {
+  display: grid;
+  grid-template-columns: 9px minmax(0, 1fr) auto minmax(0, auto) 14px;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+}
+
+@media (max-width: 780px) {
+  .rc-head {
+    grid-template-columns: 9px minmax(0, 1fr) 14px;
+  }
+  .rc-ready,
+  .rc-cost {
+    grid-column: 2 / 3;
+  }
+}
+
+.rc-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+
+.rc-name {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--ink);
+}
+
+.rc-ready {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 99px;
+  white-space: nowrap;
+}
+
+.rc-ready.ready {
+  background: rgba(27, 175, 122, 0.14);
+  color: #056e49;
+}
+
+.rc-ready.almost {
+  background: rgba(42, 120, 214, 0.13);
+  color: #1c5cab;
+}
+
+.rc-ready.setup {
+  background: rgba(250, 178, 25, 0.18);
+  color: #8a5b00;
+}
+
+.rc-ready.unavailable {
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
+.rc-cost {
+  font-size: 12.5px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--ink);
+}
+
+.rc-caret {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.rc-line {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 5px 0 0 19px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.rc-per {
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.rc-setup {
+  color: #8a5b00;
+  font-weight: 600;
+}
+
+.rc-people {
+  margin: 3px 0 0 19px;
+  font-size: 10.5px;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.rc-detail {
+  margin: 11px 0 2px 19px;
+  padding-top: 11px;
+  border-top: 1px dashed var(--border);
+  animation: step-in var(--dur) var(--ease);
+}
+
+.rc-what {
+  font-size: 12px;
+  color: var(--ink-2);
+  margin: 0 0 7px;
+}
+
+.rc-catch {
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: #7a4f00;
+  background: rgba(250, 178, 25, 0.12);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin: 0 0 11px;
+}
+
+.rc-steps-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 7px;
+}
+
+.rc-steps {
+  list-style: none;
+  counter-reset: step;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.rc-steps li {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: start;
+}
+
+.rc-steps li.done {
+  opacity: 0.55;
+}
+
+.st-tick {
+  font-size: 12px;
+  color: var(--st-good-text);
+  line-height: 1.5;
+}
+
+.rc-steps li:not(.done) .st-tick {
+  color: var(--muted);
+}
+
+.st-top {
+  display: flex;
+  gap: 9px;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.st-label {
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.st-meta {
+  font-size: 10.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.st-detail {
+  font-size: 10.5px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.st-go {
+  padding: 3px 11px;
+  font-size: 11px;
+}
+
+/* ------------------------------------------------------ capability table */
+
+.cap-scroll {
+  overflow-x: auto;
+}
+
+.cap-table {
+  min-width: 720px;
+}
+
+.cap-table th {
+  font-size: 11px;
+}
+
+.cap-corner {
+  text-align: left;
+  white-space: nowrap;
+}
+
+.cap-col {
+  white-space: nowrap;
+}
+
+.cap-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 5px;
+  vertical-align: middle;
+}
+
+.cap-table tbody th {
+  text-align: left;
+  font-size: 11.5px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.cap-cell {
+  text-align: center;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A "yes" is the least informative cell on the page, so it recedes. The
+   answers that cost somebody a rebuild are the ones that get colour. */
+.cap-cell.yes span {
+  color: var(--muted);
+}
+
+.cap-cell.limited span {
+  color: #8a5b00;
+  font-weight: 650;
+  background: rgba(250, 178, 25, 0.14);
+  border-radius: 5px;
+  padding: 1px 7px;
+}
+
+.cap-cell.no span {
+  color: var(--st-critical);
+  font-weight: 700;
+  background: rgba(208, 59, 59, 0.09);
+  border-radius: 5px;
+  padding: 1px 7px;
+}
+
+.cap-notes {
+  border-top: 1px solid var(--hairline);
+}
+
+.cap-notes details {
+  border-bottom: 1px solid var(--hairline);
+}
+
+.cap-notes summary {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  padding: 9px 15px;
+  font-size: 11.5px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.cap-notes summary::-webkit-details-marker {
+  display: none;
+}
+
+.cap-notes summary:hover {
+  background: var(--surface-2);
+}
+
+.cn-teaser {
+  color: var(--muted);
+  flex: 1;
+  min-width: 240px;
+}
+
+.cn-detail {
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr);
+  gap: 5px 14px;
+  padding: 2px 15px 13px;
+  margin: 0;
+  font-size: 11.5px;
+}
+
+@media (max-width: 640px) {
+  .cn-detail {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1px;
+  }
+  .cn-detail dt {
+    margin-top: 7px;
+  }
+}
+
+.cn-detail dt {
+  font-weight: 650;
+  color: var(--ink-2);
+}
+
+.cn-detail dd {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.rg-order {
+  font-size: 10.5px !important;
+  color: var(--muted);
+  margin-top: 5px !important;
+  padding-left: 9px;
+  border-left: 2px solid var(--hairline);
+}
+
+.rg-more {
+  margin-top: 9px;
+  font-size: 11.5px;
+}
+
+.rc-fit {
+  font-weight: 700;
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+/* Essential and Strong carry colour; Situational and Skip stay grey, because
+   a route we are telling you not to bother with should not shout. */
+.rc-fit.fit-3 {
+  color: #056e49;
+}
+
+.rc-fit.fit-2 {
+  color: #1c5cab;
+}
+
+.rc-fit.fit-1,
+.rc-fit.fit-0 {
+  color: var(--muted);
+}
