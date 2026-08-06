@@ -34,6 +34,7 @@ const ALIASES: Record<string, string> = {
   '/calendar': 'schedule month week planner',
   '/post': 'publish now compose quick',
   '/create': 'new campaign composer wizard',
+  '/send': 'email sms text blast newsletter broadcast segments characters',
   '/discover': 'website analyze suggestions ideas',
   '/inbox': 'messages comments replies dms',
   '/contacts': 'people customers audience list',
@@ -41,6 +42,7 @@ const ALIASES: Record<string, string> = {
   '/analytics': 'results reports leads revenue numbers',
   '/learned': 'insights what works patterns',
   '/hud': 'advertising channels landscape where to advertise',
+  '/spend': 'cost budget money price rates forecast cap billing how much',
   '/connections': 'accounts integrations oauth social login',
   '/settings': 'preferences team roles account',
 };

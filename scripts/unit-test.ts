@@ -7,6 +7,11 @@ import { buildFacets, graphemeLength } from '../src/lib/publishers/bluesky';
 import { encrypt, decrypt, pkceChallenge, safeEqual } from '../src/lib/oauth/crypto';
 import { mastodonPublisher } from '../src/lib/publishers/mastodon';
 import { readFileSync } from 'node:fs';
+import { countSegments, encodingOf, previewSms, proposeDowngrade, checkQuietHours } from '../src/lib/sms';
+import { checkBudget, forecastMonth, projectAds, projectEmail, projectSms } from '../src/lib/projection';
+import { amount, money, range } from '../src/lib/pricing';
+import { reachFor, reachSummary } from '../src/lib/audience';
+import type { Contact as ContactShape } from '../src/lib/types';
 
 let failures = 0;
 const ok = (m: string) => console.log('  PASS ' + m);
@@ -126,6 +131,208 @@ console.log('\n== PKCE + state ==');
   const c = pkceChallenge(v);
   c !== v && c.length === 43 ? ok('S256 challenge derived correctly') : bad('bad PKCE challenge');
   safeEqual('abc', 'abc') && !safeEqual('abc', 'abd') ? ok('constant-time compare behaves') : bad('state compare wrong');
+}
+
+console.log('\n== SMS segments: the arithmetic a bill is made of ==');
+{
+  // The boundaries. 160 is one segment; 161 is *two of 153*, not "one plus
+  // one", because concatenation costs a header in every part. Getting this
+  // wrong understates a long campaign by a whole segment per recipient.
+  eq(countSegments('a'.repeat(160)).segments, 1, '160 GSM-7 characters is one segment');
+  eq(countSegments('a'.repeat(161)).segments, 2, '161 characters is two segments (153 each, not 160)');
+  eq(countSegments('a'.repeat(306)).segments, 2, '306 characters exactly fills two segments');
+  eq(countSegments('a'.repeat(307)).segments, 3, '307 characters spills into a third');
+
+  // The trap this whole module exists for.
+  eq(encodingOf("Don't"), 'GSM-7', 'a straight apostrophe stays in the cheap alphabet');
+  eq(encodingOf('Don\u2019t'), 'UCS-2', 'a curly apostrophe forces UCS-2');
+  eq(countSegments('a'.repeat(70)).segments, 1, '70 plain characters is one segment');
+  eq(countSegments('a'.repeat(69) + '\u2019').segments, 1, '70 characters with a curly quote still fits one');
+  eq(countSegments('a'.repeat(70) + '\u2019').segments, 2, 'one more character and it costs two');
+
+  // Surrogate pairs are two code units, and the carrier bills both.
+  eq(countSegments('\u{1F600}'.repeat(35)).units, 70, '35 emoji are 70 UTF-16 units, not 35');
+  eq(countSegments('\u{1F600}'.repeat(35)).segments, 1, '35 emoji fill exactly one UCS-2 segment');
+  eq(countSegments('\u{1F600}'.repeat(36)).segments, 2, '36 emoji need a second');
+
+  // Extended GSM characters cost two septets each.
+  eq(countSegments('{}[]').units, 8, 'four bracket characters cost eight septets');
+  // ...and an escape pair cannot straddle a boundary, so the walk beats the
+  // naive division. 153 euro signs is three segments; ceil(306/153) says two.
+  const euros = countSegments('\u20ac'.repeat(153));
+  euros.segments === 3 && Math.ceil(euros.units / 153) === 2
+    ? ok('escape pairs are not split across segments (153 euro signs = 3, formula says 2)')
+    : bad(`escape-pair boundary handling wrong: ${euros.segments} segments for ${euros.units} septets`);
+
+  eq(countSegments('').segments, 0, 'an empty message costs nothing');
+}
+
+console.log('\n== SMS: naming the character that costs the money ==');
+{
+  const c = countSegments('Don\u2019t miss it');
+  eq(c.culprits.length, 1, 'exactly one culprit found');
+  eq(c.culprits[0]?.codePoint, 'U+2019', 'the culprit is identified by code point, not by looks');
+  eq(c.culprits[0]?.replacement, "'", 'a plain equivalent is offered');
+
+  const d = proposeDowngrade('Don\u2019t miss our sale \u2014 25% off\u2026');
+  eq(d.after.encoding, 'GSM-7', 'swapping typographic characters returns the message to GSM-7');
+  eq(d.text, "Don't miss our sale - 25% off...", 'the rewrite says the same thing');
+  eq(d.changed.length, 3, 'three distinct characters reported as changed');
+
+  // Emoji are a choice, not a typo — they must survive a downgrade untouched.
+  const e = proposeDowngrade('Sale today \u{1F600}');
+  eq(e.text, 'Sale today \u{1F600}', 'an emoji is never silently removed');
+  eq(e.after.encoding, 'UCS-2', 'and the message stays UCS-2, honestly');
+}
+
+console.log('\n== SMS: the parts you cannot opt out of ==');
+{
+  const p = previewSms('Sale on now');
+  p.optOutAdded && p.fullText.includes('Reply STOP')
+    ? ok('opt-out language is appended and counted')
+    : bad('opt-out not appended');
+  const q = previewSms('Sale on now. Text STOP to quit.');
+  !q.optOutAdded ? ok('a hand-written opt-out is not duplicated') : bad('second opt-out appended over the top of one');
+
+  // Quiet hours are the recipient's, not the sender's.
+  const morning = checkQuietHours(new Date('2026-08-06T14:00:00Z'), -7); // 7am Pacific
+  const midday = checkQuietHours(new Date('2026-08-06T18:00:00Z'), -7); // 11am Pacific
+  const night = checkQuietHours(new Date('2026-08-07T04:00:00Z'), -7); // 9pm Pacific
+  !morning.allowed && midday.allowed && !night.allowed
+    ? ok('quiet hours block 7am and 9pm local, allow 11am')
+    : bad(`quiet hours wrong: 7am=${morning.allowed} 11am=${midday.allowed} 9pm=${night.allowed}`);
+  morning.nextOpening && morning.nextOpening > new Date('2026-08-06T14:00:00Z')
+    ? ok('a blocked send is told when it may go')
+    : bad('no next opening offered');
+}
+
+console.log('\n== Projection: exact money and guessed money never merge ==');
+{
+  // Email inside and outside a free allowance.
+  const free = projectEmail({ provider: 'ses', recipients: 1000, sentThisMonth: 0, domainVerified: true });
+  eq(free.exactCents, 0, '1,000 sends inside a 3,000 free allowance cost nothing');
+  const paid = projectEmail({ provider: 'ses', recipients: 1000, sentThisMonth: 3000, domainVerified: true });
+  eq(paid.exactCents, 10, 'the same send costs 10 cents once the allowance is gone');
+  const half = projectEmail({ provider: 'ses', recipients: 1000, sentThisMonth: 2500, domainVerified: true });
+  eq(half.exactCents, 5, 'a send straddling the allowance is billed only for the part outside it');
+
+  const unverified = projectEmail({ provider: 'ses', recipients: 100, sentThisMonth: 0, domainVerified: false });
+  unverified.blockers.length > 0
+    ? ok('an unverified sending domain blocks the send')
+    : bad('unverified domain allowed through');
+
+  // SMS: the fixed costs that dominate a small list.
+  const sms = projectSms({ body: 'Three slots left. Book now.', recipients: 400, country: 'US', paidFixedCostIds: [] });
+  const fixed = sms.items.filter((i) => i.kind === 'fixed').reduce((s, i) => s + i.cents, 0);
+  const msgs = sms.items.filter((i) => i.kind === 'message').reduce((s, i) => s + i.cents, 0);
+  fixed > msgs * 3
+    ? ok(`on 400 contacts setup (${fixed}c) dwarfs the messages (${msgs}c) — the point of showing it`)
+    : bad(`setup ${fixed}c vs messages ${msgs}c — expected setup to dominate`);
+  sms.blockers.some((b) => /10DLC/i.test(b.label))
+    ? ok('unpaid 10DLC registration blocks the send')
+    : bad('a text can be sent without registering');
+
+  const registered = projectSms({ body: 'Three slots left. Book now.', recipients: 400, country: 'US', paidFixedCostIds: ['sms.10dlc.brand', 'sms.10dlc.campaign', 'sms.number'] });
+  eq(registered.blockers.length, 0, 'once registered, nothing blocks');
+  eq(registered.exactCents, msgs, 'and the cost is just the messages');
+
+  // A curly apostrophe must show up as money, not just as a warning.
+  const plain = projectSms({ body: "Don't miss it", recipients: 1000, country: 'US', paidFixedCostIds: ['sms.10dlc.brand', 'sms.10dlc.campaign', 'sms.number'] });
+  const curly = projectSms({ body: 'Don\u2019t miss it', recipients: 1000, country: 'US', paidFixedCostIds: ['sms.10dlc.brand', 'sms.10dlc.campaign', 'sms.number'] });
+  eq(plain.exactCents, curly.exactCents, 'a short message costs the same either way (both fit one segment)');
+  // 130 characters plus the 23-character opt-out is 153 — one GSM-7 segment
+  // with room to spare, and three UCS-2 segments. This is the worst case and
+  // it is not contrived: it is a normal-length promotional text.
+  const paidIds = ['sms.10dlc.brand', 'sms.10dlc.campaign', 'sms.number'];
+  const longPlain = projectSms({ body: 'a'.repeat(129) + "'", recipients: 1000, country: 'US', paidFixedCostIds: paidIds });
+  const longCurly = projectSms({ body: 'a'.repeat(129) + '\u2019', recipients: 1000, country: 'US', paidFixedCostIds: paidIds });
+  longCurly.exactCents === longPlain.exactCents * 3
+    ? ok(`one invisible character triples a 130-character send (${longPlain.exactCents}c -> ${longCurly.exactCents}c on 1,000 contacts)`)
+    : bad(`expected a 3x jump, got ${longPlain.exactCents}c vs ${longCurly.exactCents}c`);
+  longCurly.notes.some((n) => /U\+2019/.test(n))
+    ? ok('and the projection names the character responsible')
+    : bad('the cost jumped without saying why');
+}
+
+console.log('\n== Ads: the spend is exact, the outcome is a range ==');
+{
+  const ads = projectAds([{ channel: 'facebook', dailyBudgetCents: 2000, days: 14 }]);
+  eq(ads.exactCents, 28000, 'a $20/day flight for 14 days costs exactly $280');
+  eq(ads.items[0]?.certainty, 'exact', 'the spend is not an estimate — you set it');
+  eq(ads.outcomes.length, 1, 'one outcome range reported');
+  const o = ads.outcomes[0];
+  o && o.low < o.high
+    ? ok(`impressions stay a range: ${o.low.toLocaleString('en-US')}-${o.high.toLocaleString('en-US')}`)
+    : bad('outcome collapsed to a single number');
+
+  const thin = projectAds([{ channel: 'tiktok', dailyBudgetCents: 300, days: 7 }]);
+  thin.notes.some((n) => /learning phase/i.test(n))
+    ? ok('an underfunded flight is called out rather than quietly under-delivering')
+    : bad('no warning for a budget below the platform minimum');
+
+  // Formatting must never invent a midpoint.
+  range({ lowCents: 700, highCents: 2500 }).includes('\u2013')
+    ? ok('a range renders as a range')
+    : bad('range() collapsed to one number');
+
+  // Zero is "free" when it is a price and zero when it is a quantity. Mixing
+  // them produced "only free is left of your cap", which is not a sentence.
+  eq(money(0), 'free', 'a zero price is "free"');
+  eq(amount(0), '0\u00a2', 'a zero quantity is a number');
+  eq(money(2500), '$25.00', 'dollars render with cents below $100');
+  eq(amount(1), '1\u00a2', 'a whole cent has no decimals');
+  eq(amount(1.1), '1.10\u00a2', 'a fractional rate keeps them — 1.1c must not round to 1c');
+  eq(amount(75), '75\u00a2', 'sub-dollar amounts stay in cents');
+  const headroom = checkBudget({ capCents: 100, spentCents: 100, projectedCents: 50, hardStop: true });
+  !headroom.message.includes('free')
+    ? ok('a budget message never calls an empty balance "free"')
+    : bad('budget message says: ' + headroom.message);
+}
+
+console.log('\n== Budgets: a hard cap actually stops ==');
+{
+  const soft = checkBudget({ capCents: 50000, spentCents: 48000, projectedCents: 5000, hardStop: false });
+  soft.wouldExceed && !soft.blocked ? ok('a soft cap warns and lets it through') : bad('soft cap behaved like a hard one');
+  const hard = checkBudget({ capCents: 50000, spentCents: 48000, projectedCents: 5000, hardStop: true });
+  hard.blocked ? ok('a hard cap refuses the send') : bad('hard cap did not block');
+  const fine = checkBudget({ capCents: 50000, spentCents: 1000, projectedCents: 500, hardStop: true });
+  !fine.wouldExceed && fine.message.includes('left') ? ok('inside the cap it reports headroom') : bad('no headroom reported');
+}
+
+console.log('\n== Forecast: it refuses to extrapolate from nothing ==');
+{
+  const early = forecastMonth({ spentCents: 1200, committedCents: 0, now: new Date('2026-08-02T12:00:00Z') });
+  eq(early.projectedMonthEndCents, 1200, 'on day 2 it reports spend, not a run rate');
+  /too early|days in/i.test(early.basis) ? ok('and says why') : bad('no explanation for the refusal: ' + early.basis);
+
+  const mid = forecastMonth({ spentCents: 15500, committedCents: 5000, now: new Date('2026-08-15T12:00:00Z') });
+  // 155c/day x 31 days + 5000 committed
+  eq(mid.projectedMonthEndCents, Math.round((15500 / 15) * 31) + 5000, 'mid-month it carries the run rate to month end and adds commitments');
+  mid.projectedMonthEndCents > mid.spentCents ? ok('the projection exceeds spend-to-date') : bad('projection below spend');
+}
+
+console.log('\n== Reach: who can actually be reached ==');
+{
+  const mk = (n: number, over: Partial<ContactShape>): ContactShape => ({
+    id: `c${n}`, name: `Person ${n}`, email: `p${n}@example.com`, phone: '+15550000000',
+    brandId: 'b1', segmentIds: [], emailConsent: 'subscribed', smsConsent: 'subscribed',
+    source: 'seed', addedAt: '2026-01-01', lastActivity: '2026-01-01', ...over,
+  });
+  const contacts = [
+    mk(1, {}),
+    mk(2, { smsConsent: 'pending' }),
+    mk(3, { phone: null }),
+    mk(4, { emailConsent: 'unsubscribed', smsConsent: 'unsubscribed' }),
+    mk(5, { emailConsent: 'pending', smsConsent: 'unsubscribed' }),
+  ];
+  const email = reachFor(contacts, 'email');
+  const sms = reachFor(contacts, 'sms');
+  eq(email.reachable, 3, 'email reaches everyone subscribed with an address');
+  eq(sms.reachable, 1, 'SMS reaches far fewer — pending consent counts as no');
+  sms.exclusions.some((e) => /TCPA/.test(e.fix ?? ''))
+    ? ok('the reason pending consent is excluded is stated, with the penalty')
+    : bad('no explanation for excluding pending SMS consent');
+  reachSummary(sms).includes('1 of 5') ? ok('the summary leads with the shortfall') : bad('summary hides the gap: ' + reachSummary(sms));
 }
 
 /**

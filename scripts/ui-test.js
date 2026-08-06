@@ -148,7 +148,7 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
   // scrollbar on every screen.
   for (const [w, h] of [[1920, 1080], [1280, 900], [900, 800], [760, 900], [600, 800]]) {
     await page.setViewportSize({ width: w, height: h });
-    for (const route of ['/hud', '/calendar', '/analytics', '/contacts', '/media']) {
+    for (const route of ['/hud', '/calendar', '/analytics', '/contacts', '/media', '/send', '/spend']) {
       await page.goto('http://localhost:3000' + route, { waitUntil: 'networkidle' });
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 2);
       overflow ? bad(`horizontal overflow on ${route} at ${w}px`) : ok(`no overflow ${route} @ ${w}px`);
@@ -1122,6 +1122,117 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
       if (expand) { await expand.click(); await page.waitForTimeout(500); }
     }
   }
+
+  console.log('\n== 20. The composer prices a text before it is sent ==');
+  // The point of this section is that the *cost* reacts, not just the counter.
+  // A composer that shows "3 segments" while the price stays at $4.20 has
+  // moved the lie one step later, which is no better than hiding it.
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await page.goto('http://localhost:3000/send', { waitUntil: 'networkidle' });
+
+  const smsTab = await page.$('button[role="tab"]:has-text("Text")');
+  if (!smsTab) { bad('send page has no Text tab'); }
+  else {
+    await smsTab.click();
+    await page.waitForTimeout(250);
+
+    const readCost = () => page.$eval('.ch-total', (e) => e.textContent.trim());
+    const readSegments = () => page.$eval('.sm-cost', (e) => e.textContent.trim());
+    const readEncoding = () => page.$eval('.sm-enc', (e) => e.textContent.trim());
+    const setBody = async (text) => {
+      await page.fill('#body', text);
+      await page.waitForTimeout(200);
+    };
+
+    // A short plain message: one segment, GSM-7.
+    await setBody('Three slots left this month. Book at our shop.');
+    const plainEnc = await readEncoding();
+    const plainCost = await readCost();
+    plainEnc === 'GSM-7' ? ok('plain text is GSM-7') : bad('plain text encoded as ' + plainEnc);
+
+    // Same message, one curly apostrophe. This is the whole thesis: an
+    // invisible character that costs real money.
+    await setBody('Three slots left this month. Book at our shop\u2019s counter.');
+    const curlyEnc = await readEncoding();
+    const curlyCost = await readCost();
+    curlyEnc === 'UCS-2' ? ok('a curly apostrophe flips the encoding to UCS-2') : bad('curly apostrophe still ' + curlyEnc);
+
+    const named = await page.$('.cul-name');
+    if (named) {
+      const t = await named.textContent();
+      /right single quote|curly/i.test(t)
+        ? ok('the offending character is named, not just counted: ' + t.trim())
+        : bad('culprit not identified: ' + t);
+    } else bad('no culprit list shown for a UCS-2 message');
+
+    // And the fix is offered with the saving attached.
+    const fixBtn = await page.$('.sm-fix');
+    if (!fixBtn) bad('no one-click fix offered');
+    else {
+      const label = await fixBtn.textContent();
+      /swap/i.test(label) ? ok('fix offered: ' + label.trim()) : bad('unexpected fix label: ' + label);
+      await fixBtn.click();
+      await page.waitForTimeout(250);
+      const afterEnc = await readEncoding();
+      afterEnc === 'GSM-7' ? ok('applying the fix returns the message to GSM-7') : bad('still ' + afterEnc + ' after fix');
+    }
+
+    // A long message must cost strictly more than a short one. This is the
+    // check that would have caught a counter wired to nothing.
+    await setBody('Book now at our shop.');
+    const shortCost = await readCost();
+    const shortSegs = await readSegments();
+    await setBody('Book now at our shop. '.repeat(12));
+    const longCost = await readCost();
+    const longSegs = await readSegments();
+    const cents = (s) => Number(String(s).replace(/[^0-9.]/g, '')) * (String(s).includes('\u00a2') ? 1 : 100);
+    cents(longCost) > cents(shortCost)
+      ? ok(`cost rises with length (${shortCost} \u2192 ${longCost})`)
+      : bad(`cost did not rise with length: ${shortCost} vs ${longCost} [${shortSegs} / ${longSegs}]`);
+    void plainCost; void curlyCost;
+
+    // Setup costs are on screen before the first message, at full size.
+    const setupSeen = await page.$$eval('.cost-line.fixed .cl-label', (n) => n.map((e) => e.textContent));
+    setupSeen.some((t) => /10DLC|registration/i.test(t))
+      ? ok('10DLC registration is shown as its own line, not folded into the rate')
+      : bad('setup costs missing from the rail: ' + JSON.stringify(setupSeen));
+
+    // And it blocks: you cannot send before registering.
+    const sendBtn = await page.$('.cost-send');
+    const disabled = sendBtn ? await sendBtn.isDisabled() : false;
+    disabled ? ok('send is blocked until registration is paid') : bad('send allowed with blocking setup unpaid');
+  }
+
+  console.log('\n== 21. Exact money and guessed money look different ==');
+  await page.goto('http://localhost:3000/spend', { waitUntil: 'networkidle' });
+  const flightCost = await page.$eval('.flr-cost .flr-value', (e) => e.textContent.trim());
+  const flightBuys = await page.$eval('.flr-outcome .flr-value', (e) => e.textContent.trim());
+  /^\$/.test(flightCost) ? ok('flight cost is a single figure: ' + flightCost) : bad('unexpected cost: ' + flightCost);
+  flightBuys.includes('\u2013')
+    ? ok('what it buys stays a range: ' + flightBuys)
+    : bad('outcome collapsed to a point estimate: ' + flightBuys);
+
+  const weights = await page.evaluate(() => {
+    const exact = document.querySelector('.flr-cost .flr-value');
+    const est = document.querySelector('.flr-outcome .flr-value');
+    return [getComputedStyle(exact).fontWeight, getComputedStyle(est).fontWeight];
+  });
+  Number(weights[0]) > Number(weights[1])
+    ? ok(`an estimate is set lighter than a fact (${weights[0]} vs ${weights[1]})`)
+    : bad(`estimate and fact share a weight: ${weights.join(' vs ')}`);
+
+  // Moving the budget slider must move the month-end projection.
+  const totalBefore = await page.$eval('.ft-value', (e) => e.textContent.trim());
+  await page.$eval('.fl-controls input[type=range]', (el) => {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    setter.call(el, '9000');
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await page.waitForTimeout(250);
+  const totalAfter = await page.$eval('.ft-value', (e) => e.textContent.trim());
+  totalBefore !== totalAfter
+    ? ok(`raising a daily budget moves the total (${totalBefore} \u2192 ${totalAfter})`)
+    : bad('total did not react to the budget slider');
 
   console.log('\n' + (errors.length ? 'PAGE ERRORS:\n' + errors.join('\n') : 'no page errors'));
   console.log(fail.length ? `\n${fail.length} FAILURE(S)` : '\nALL CHECKS PASSED');

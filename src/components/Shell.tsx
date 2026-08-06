@@ -49,6 +49,11 @@ const NAV_SECTIONS: { label: string; items: NavItem[] }[] = [
       { href: '/post', label: 'Quick Post', d: 'M4 12l16-8-6 16-2.5-6.5L4 12z' },
       { href: '/create', label: 'Create', d: 'M12 5v14M5 12h14' },
       {
+        href: '/send',
+        label: 'Email & Text',
+        d: 'M3 6h18v12H3zm0 1l9 6.5L21 7',
+      },
+      {
         href: '/discover',
         label: 'Discover',
         d: 'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zm10 2l-4.35-4.35M11 8v6m-3-3h6',
@@ -77,6 +82,11 @@ const NAV_SECTIONS: { label: string; items: NavItem[] }[] = [
         d: 'M12 3l8 4-8 4-8-4 8-4zm8 8l-8 4-8-4m16 4l-8 4-8-4',
       },
       { href: '/hud', label: 'Ad HUD', d: 'M12 3v3.5M12 17.5V21M3 12h3.5M17.5 12H21M12 7.5a4.5 4.5 0 1 0 .01 0' },
+      {
+        href: '/spend',
+        label: 'Spend',
+        d: 'M12 3v18M8 7.5h5.5a2.5 2.5 0 0 1 0 5h-3a2.5 2.5 0 0 0 0 5H16',
+      },
     ],
   },
   {

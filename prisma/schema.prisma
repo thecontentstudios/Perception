@@ -43,33 +43,36 @@ model Organization {
   auditEvents AuditEvent[]
   conversions Conversion[]
   sessions    Session[]
+  spend       SpendEntry[]
+  budgets     Budget[]
 }
 
 model Brand {
-  id             String   @id @default(cuid())
+  id             String       @id @default(cuid())
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id])
   name           String
   industry       String
   website        String?
-  colorIndex     Int      @default(0)
-  createdAt      DateTime @default(now())
+  colorIndex     Int          @default(0)
+  createdAt      DateTime     @default(now())
 
   locations    Location[]
   campaigns    Campaign[]
   media        MediaAsset[]
   contacts     Contact[]
   destinations PublishDestination[]
+  spend        SpendEntry[]
 
   @@index([organizationId])
 }
 
 model Location {
-  id      String  @id @default(cuid())
-  brandId String
-  brand   Brand   @relation(fields: [brandId], references: [id])
-  name    String
-  address String?
+  id           String  @id @default(cuid())
+  brandId      String
+  brand        Brand   @relation(fields: [brandId], references: [id])
+  name         String
+  address      String?
   // e.g. the Google Business Profile location this maps to
   externalRefs Json?
 
@@ -86,10 +89,10 @@ model User {
   twoFactorEnabled Boolean  @default(false)
   createdAt        DateTime @default(now())
 
-  memberships Membership[]
-  sessions    Session[]
-  approvalsRequested Approval[] @relation("requestedBy")
-  approvalsToDecide  Approval[] @relation("approver")
+  memberships        Membership[]
+  sessions           Session[]
+  approvalsRequested Approval[]   @relation("requestedBy")
+  approvalsToDecide  Approval[]   @relation("approver")
 }
 
 /// Server-side sessions, deliberately not JWTs.
@@ -98,23 +101,23 @@ model User {
 /// and "we think that laptop was stolen" impossible to honour. A row is one
 /// DELETE. The cost is a lookup per request, which at this scale is nothing.
 model Session {
-  id        String   @id @default(cuid())
+  id             String       @id @default(cuid())
   /// SHA-256 of the cookie value. The raw token is never stored, so a database
   /// dump does not hand over live sessions.
-  tokenHash String   @unique
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash      String       @unique
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   /// The tenant this session is acting in. A user in several organizations
   /// gets one session per organization rather than an ambient "current org",
   /// so a request can never be ambiguous about whose data it is touching.
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  expiresAt DateTime
-  createdAt DateTime @default(now())
-  lastSeenAt DateTime @default(now())
+  expiresAt      DateTime
+  createdAt      DateTime     @default(now())
+  lastSeenAt     DateTime     @default(now())
   /// Coarse, for the "recent sign-ins" list. Never used for authorization.
-  userAgent String?
-  ip        String?
+  userAgent      String?
+  ip             String?
 
   @@index([userId])
   @@index([expiresAt])
@@ -131,11 +134,11 @@ enum Role {
 }
 
 model Membership {
-  id             String @id @default(cuid())
+  id             String       @id @default(cuid())
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id])
   userId         String
-  user           User   @relation(fields: [userId], references: [id])
+  user           User         @relation(fields: [userId], references: [id])
   role           Role
 
   @@unique([organizationId, userId])
@@ -174,20 +177,20 @@ enum ConnectionStatus {
 }
 
 model ConnectedAccount {
-  id             String           @id @default(cuid())
-  organizationId String
-  organization   Organization     @relation(fields: [organizationId], references: [id])
-  channel        Channel
-  status         ConnectionStatus @default(CONNECTED)
-  displayName    String
+  id              String           @id @default(cuid())
+  organizationId  String
+  organization    Organization     @relation(fields: [organizationId], references: [id])
+  channel         Channel
+  status          ConnectionStatus @default(CONNECTED)
+  displayName     String
   destinationKind String
   // OAuth tokens encrypted at rest (application-layer envelope encryption);
   // never returned by the API.
   encryptedTokens Bytes?
-  scopes         String[]
-  expiresAt      DateTime?
-  lastSyncAt     DateTime?
-  connectedById  String?
+  scopes          String[]
+  expiresAt       DateTime?
+  lastSyncAt      DateTime?
+  connectedById   String?
 
   variations   ChannelVariation[]
   destinations PublishDestination[]
@@ -198,21 +201,21 @@ model ConnectedAccount {
 /// A place a post can actually land: one Page, professional account,
 /// location, company page, or board. One ConnectedAccount yields many.
 model PublishDestination {
-  id          String           @id @default(cuid())
-  accountId   String
-  account     ConnectedAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  channel     Channel
-  name        String
-  kind        String
+  id         String           @id @default(cuid())
+  accountId  String
+  account    ConnectedAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  channel    Channel
+  name       String
+  kind       String
   /// The platform's own identifier, used for publishing and dedup.
-  externalId  String
-  brandId     String?
-  brand       Brand?           @relation(fields: [brandId], references: [id])
-  enabled     Boolean          @default(false)
-  followers   Int?
+  externalId String
+  brandId    String?
+  brand      Brand?           @relation(fields: [brandId], references: [id])
+  enabled    Boolean          @default(false)
+  followers  Int?
   /// Destination-scoped problems: a missing role, an unverified location.
-  issues      String[]
-  hue         Int              @default(0)
+  issues     String[]
+  hue        Int              @default(0)
 
   variations ChannelVariation[]
 
@@ -258,6 +261,7 @@ model Campaign {
   items        ContentItem[]
   conversions  Conversion[]
   trackedLinks TrackedLink[]
+  spend        SpendEntry[]
 
   @@index([organizationId, brandId, status])
 }
@@ -286,41 +290,41 @@ enum VariationStatus {
 }
 
 model ChannelVariation {
-  id            String          @id @default(cuid())
-  contentItemId String
-  contentItem   ContentItem     @relation(fields: [contentItemId], references: [id])
-  accountId     String?
-  account       ConnectedAccount? @relation(fields: [accountId], references: [id])
+  id                   String              @id @default(cuid())
+  contentItemId        String
+  contentItem          ContentItem         @relation(fields: [contentItemId], references: [id])
+  accountId            String?
+  account              ConnectedAccount?   @relation(fields: [accountId], references: [id])
   /// The specific place this publishes to. Null falls back to the brand's
   /// default for the channel, and preflight surfaces that.
-  destinationId String?
-  destination   PublishDestination? @relation(fields: [destinationId], references: [id])
-  channel       Channel
-  format        String
-  status        VariationStatus @default(DRAFT)
-  scheduledAt   DateTime?
-  publishedAt   DateTime?
-  body          String
-  subject       String?
-  preheader     String?
-  hasUnsubscribeFooter Boolean  @default(true)
-  ctaLabel      String?
-  ctaUrl        String?
-  hashtags      String[]
-  assigneeId    String?
-  overridden    Boolean         @default(false)
+  destinationId        String?
+  destination          PublishDestination? @relation(fields: [destinationId], references: [id])
+  channel              Channel
+  format               String
+  status               VariationStatus     @default(DRAFT)
+  scheduledAt          DateTime?
+  publishedAt          DateTime?
+  body                 String
+  subject              String?
+  preheader            String?
+  hasUnsubscribeFooter Boolean             @default(true)
+  ctaLabel             String?
+  ctaUrl               String?
+  hashtags             String[]
+  assigneeId           String?
+  overridden           Boolean             @default(false)
   /// Set when a worker takes this post to publish it, cleared when it is done.
   /// Infrastructure state, deliberately not a `status` value: the owner's
   /// vocabulary is draft/approved/scheduled/published, and a claim that a
   /// crashed worker never released has to be reclaimable after a timeout —
   /// which a status enum cannot express.
-  claimedAt     DateTime?
+  claimedAt            DateTime?
 
-  media     VariationMedia[]
-  approvals Approval[]
-  attempts  PublicationAttempt[]
-  published PublishedPost?
-  metrics   Metric[]
+  media       VariationMedia[]
+  approvals   Approval[]
+  attempts    PublicationAttempt[]
+  published   PublishedPost?
+  metrics     Metric[]
   trackedLink TrackedLink?
   conversions Conversion[]
 
@@ -329,11 +333,11 @@ model ChannelVariation {
 }
 
 model MediaAsset {
-  id             String   @id @default(cuid())
+  id             String       @id @default(cuid())
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id])
   brandId        String?
-  brand          Brand?   @relation(fields: [brandId], references: [id])
+  brand          Brand?       @relation(fields: [brandId], references: [id])
   kind           String // image | video | logo | document
   storageKey     String // S3 object key; served via CDN
   fileName       String
@@ -345,7 +349,7 @@ model MediaAsset {
   altText        String?
   tags           String[]
   uploadedById   String?
-  createdAt      DateTime @default(now())
+  createdAt      DateTime     @default(now())
 
   usages VariationMedia[]
 
@@ -442,8 +446,9 @@ model Contact {
   source         String?
   createdAt      DateTime     @default(now())
 
-  segments   SegmentMember[]
-  deliveries EmailDelivery[]
+  segments    SegmentMember[]
+  deliveries  EmailDelivery[]
+  texts       SmsDelivery[]
   conversions Conversion[]
 
   @@index([organizationId, email])
@@ -561,17 +566,17 @@ model Metric {
 /// campaign is the whole point: "which post caused this" is the question the
 /// product exists to answer, and a shared campaign link can never answer it.
 model TrackedLink {
-  id          String   @id @default(cuid())
+  id          String           @id @default(cuid())
   /// The path segment in /r/<code>. Short, URL-safe, unguessable enough that
   /// scanning the space is not worth anyone's time.
-  code        String   @unique
-  variationId String   @unique
+  code        String           @unique
+  variationId String           @unique
   variation   ChannelVariation @relation(fields: [variationId], references: [id], onDelete: Cascade)
   campaignId  String
-  campaign    Campaign @relation(fields: [campaignId], references: [id])
+  campaign    Campaign         @relation(fields: [campaignId], references: [id])
   /// Where the click actually goes, before UTMs are appended.
   targetUrl   String
-  createdAt   DateTime @default(now())
+  createdAt   DateTime         @default(now())
 
   clicks LinkClick[]
 
@@ -579,18 +584,18 @@ model TrackedLink {
 }
 
 model LinkClick {
-  id       String      @id @default(cuid())
-  linkId   String
-  link     TrackedLink @relation(fields: [linkId], references: [id], onDelete: Cascade)
+  id        String      @id @default(cuid())
+  linkId    String
+  link      TrackedLink @relation(fields: [linkId], references: [id], onDelete: Cascade)
   /// First-party id set on the visitor, so a conversion minutes later can be
   /// joined back to the post that caused it.
   visitorId String
-  clickedAt DateTime   @default(now())
+  clickedAt DateTime    @default(now())
   referrer  String?
   userAgent String?
   /// Set when the same visitor has clicked this link before — counted, but not
   /// mistaken for a second person.
-  repeat    Boolean    @default(false)
+  repeat    Boolean     @default(false)
 
   conversions Conversion[]
 
@@ -599,30 +604,30 @@ model LinkClick {
 }
 
 model Conversion {
-  id             String   @id @default(cuid())
+  id             String            @id @default(cuid())
   organizationId String
-  organization   Organization @relation(fields: [organizationId], references: [id])
+  organization   Organization      @relation(fields: [organizationId], references: [id])
   /// Nullable on purpose. An unattributed quote request is still a real quote
   /// request, and dropping it would make the totals quietly wrong — "8 leads"
   /// when the owner counted 12. Reporting says how many we could trace.
-  campaignId String?
-  campaign   Campaign? @relation(fields: [campaignId], references: [id])
+  campaignId     String?
+  campaign       Campaign?         @relation(fields: [campaignId], references: [id])
   /// Which post, when we know. This is what Phase 3 learns from.
-  variationId String?
-  variation   ChannelVariation? @relation(fields: [variationId], references: [id])
-  clickId    String?
-  click      LinkClick? @relation(fields: [clickId], references: [id])
-  contactId  String?
-  contact    Contact? @relation(fields: [contactId], references: [id])
+  variationId    String?
+  variation      ChannelVariation? @relation(fields: [variationId], references: [id])
+  clickId        String?
+  click          LinkClick?        @relation(fields: [clickId], references: [id])
+  contactId      String?
+  contact        Contact?          @relation(fields: [contactId], references: [id])
   // form_submission | booking | trial_signup | purchase | call | quote_request
-  kind       String
-  channel    Channel?
-  valueCents Int      @default(0)
-  occurredAt DateTime @default(now())
+  kind           String
+  channel        Channel?
+  valueCents     Int               @default(0)
+  occurredAt     DateTime          @default(now())
   /// Caller-supplied id, used to make a double-submitted form count once.
-  externalId String?
+  externalId     String?
   // utm payload / referrer captured by the tracking snippet
-  attribution Json?
+  attribution    Json?
 
   @@unique([organizationId, externalId])
   @@index([campaignId, kind, occurredAt])
@@ -644,4 +649,96 @@ model AuditEvent {
   at             DateTime     @default(now())
 
   @@index([organizationId, at])
+}
+
+// ---------------------------------------------------------------------------
+// Money
+// ---------------------------------------------------------------------------
+
+/// Every cent that leaves the business, in one table.
+///
+/// The alternative — deriving spend by counting deliveries and multiplying by
+/// a rate — breaks the first time a rate changes, because last month's sends
+/// silently reprice at this month's rate and the history rewrites itself. A
+/// ledger records what was actually charged at the moment it was charged, so
+/// a number the owner saw in March is still that number in June.
+model SpendEntry {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  brandId        String?
+  brand          Brand?       @relation(fields: [brandId], references: [id])
+  channel        Channel
+  /// message | fixed | ad — the three cost shapes, kept apart because they
+  /// behave differently and averaging them produces a meaningless number.
+  kind           String
+  /// exact | estimated. Ad spend imported from a platform mid-flight is an
+  /// estimate until the invoice settles; a sent email is exact forever.
+  certainty      String       @default("exact")
+  cents          Int
+  /// Sends this entry paid for — messages for email, segments for SMS.
+  units          Int          @default(1)
+  campaignId     String?
+  campaign       Campaign?    @relation(fields: [campaignId], references: [id])
+  note           String?
+  occurredAt     DateTime     @default(now())
+
+  @@index([organizationId, occurredAt])
+  @@index([organizationId, channel, occurredAt])
+}
+
+/// A monthly ceiling the owner sets, and what happens when it is reached.
+///
+/// `hardStop` is the whole point. A budget that only warns is a budget that
+/// gets exceeded, and "we sent you an email at 90%" is not a defence when the
+/// card is charged. When hardStop is on, the send path refuses.
+model Budget {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  brandId        String?
+  /// Null means "everything" — one cap across all channels.
+  channel        Channel?
+  /// The uniqueness key, as a non-null string: "<brand|all>:<channel|all>".
+  ///
+  /// The obvious design is a compound unique over (org, brandId, channel,
+  /// month), and it silently does not work. Postgres treats NULLs as
+  /// distinct, so a workspace-wide cap — both columns null — can be inserted
+  /// twice, and the second one is the cap nobody is enforcing. Prisma will
+  /// not even accept nullable columns in an upsert's `where`. Folding the
+  /// nullability into one non-null string makes the constraint real.
+  scope          String
+  /// YYYY-MM. A budget is a calendar-month thing because that is how every
+  /// platform in this space bills and how every owner in this space thinks.
+  month          String
+  capCents       Int
+  hardStop       Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+
+  @@unique([organizationId, scope, month])
+  @@index([organizationId, month])
+}
+
+/// A text message that was sent, priced at the moment of sending.
+///
+/// Segments, not messages, because segments are the billing unit — see
+/// src/lib/sms.ts. Storing the count at send time means a later edit to the
+/// template cannot retroactively change what a past send cost.
+model SmsDelivery {
+  id          String         @id @default(cuid())
+  variationId String
+  contactId   String
+  contact     Contact        @relation(fields: [contactId], references: [id])
+  status      DeliveryStatus @default(QUEUED)
+  segments    Int
+  encoding    String
+  costCents   Int
+  providerRef String?
+  sentAt      DateTime?
+  deliveredAt DateTime?
+  failedAt    DateTime?
+  failReason  String?
+
+  @@index([variationId, status])
+  @@index([contactId])
 }

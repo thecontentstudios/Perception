@@ -146,6 +146,37 @@ export const CONNECT_SPECS: Partial<Record<Channel, ConnectSpec>> = {
     caveat: 'Campaigns cannot send until all three verify. This protects your domain reputation.',
   },
 
+  /**
+   * Texting, which is the only channel here where connecting costs money
+   * before a single message is sent.
+   *
+   * Every other spec in this file describes an authorization: click a button,
+   * grant a scope, done. SMS is a procurement: a business rents a number,
+   * registers its identity with the US carriers, and registers each use case
+   * separately — $44 once and $11.15 a month before the first text goes out,
+   * and up to a fortnight of waiting. Presenting that as "Connect SMS" next to
+   * "Connect Instagram" would be the most expensive omission in the product.
+   */
+  sms: {
+    channel: 'sms',
+    destinationNoun: 'sending number',
+    destinationNounPlural: 'sending numbers',
+    prerequisites: [
+      'You have a registered business name and EIN (US carriers verify both)',
+      'You collect explicit opt-in before texting anyone — a checkbox that is not pre-ticked',
+      'You accept the setup cost: $44 once, then about $11.15 a month',
+    ],
+    scopes: [
+      { scope: 'Brand registration', why: 'US carriers require every business sending texts to identify itself. Unregistered messages are filtered — you pay for them and they do not arrive.', required: true },
+      { scope: 'Campaign registration', why: 'One per use case. Promotional texts and appointment reminders are separate registrations with separate approval.', required: true },
+      { scope: 'Number provisioning', why: 'The number your texts come from. Toll-free costs about the same and clears faster.', required: true },
+    ],
+    afterAuth:
+      'Brand registration usually clears in a day. Campaign registration takes two days to two weeks depending on the use case, and nothing can be sent until it does.',
+    caveat:
+      'Marketing texts are restricted to 8am–9pm in the recipient’s time zone, and the penalty for getting consent wrong runs $500–$1,500 per message. On a 400-person list that is a business-ending number, so consent is enforced here rather than trusted.',
+  },
+
   tiktok: {
     channel: 'tiktok',
     destinationNoun: 'account',

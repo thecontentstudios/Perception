@@ -69,6 +69,12 @@ async function main() {
       ['/api/media', { method: 'POST', body: new FormData() }],
       ['/api/connect/bluesky', { method: 'POST', body: JSON.stringify({ handle: 'x', appPassword: 'y' }) }],
       ['/api/connect/mastodon', { method: 'POST', body: JSON.stringify({ host: 'x', token: 'y' }) }],
+      // Sending costs money, and setting a budget decides how much can be
+      // spent. Both have to be shut to a stranger — including the dry run,
+      // which would otherwise report a tenant's audience size for free.
+      ['/api/send', { method: 'POST', body: JSON.stringify({ channel: 'email', subject: 'x', body: 'y' }) }],
+      ['/api/send', { method: 'POST', body: JSON.stringify({ channel: 'email', subject: 'x', body: 'y', dryRun: true }) }],
+      ['/api/spend', { method: 'PUT', body: JSON.stringify({ capCents: 999999, hardStop: false }) }],
     ];
     for (const [path, init] of probes) {
       const res = await fetch(`${BASE}${path}`, {
@@ -83,7 +89,7 @@ async function main() {
 
   console.log('\n== Reading is gated too ==');
   {
-    for (const path of ['/api/analytics', '/api/learning', '/api/events?campaignId=c-fall', '/api/links?campaignId=c-fall']) {
+    for (const path of ['/api/analytics', '/api/learning', '/api/events?campaignId=c-fall', '/api/links?campaignId=c-fall', '/api/spend']) {
       const res = await fetch(`${BASE}${path}`);
       const body = await res.json().catch(() => ({}));
       // Analytics degrades to fixtures rather than 401, which is a deliberate
@@ -195,6 +201,117 @@ async function main() {
       await db.brand.delete({ where: { id: otherBrand.id } });
       await db.session.deleteMany({ where: { organizationId: other.id } });
       await db.organization.delete({ where: { id: other.id } });
+    }
+  }
+
+  console.log('\n== Money: the quote and the charge come from one place ==');
+  {
+    const user = await db.user.findFirst({ where: { passwordHash: { not: null } } });
+    if (!user) {
+      console.log('  SKIP no seeded user');
+    } else {
+      const login = await fetch(`${BASE}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: user.email, password: process.env.SEED_PASSWORD || 'demo-password-change-me' }),
+      });
+      const cookie = login.headers.get('set-cookie')?.split(';')[0] ?? '';
+      const auth = { cookie, 'content-type': 'application/json' };
+      const orgId = (await db.membership.findFirst({ where: { userId: user.id } }))?.organizationId ?? '';
+      const month = new Date().toISOString().slice(0, 7);
+
+      // Start from a clean slate so the arithmetic below is checkable.
+      await db.spendEntry.deleteMany({ where: { organizationId: orgId } });
+      await db.budget.deleteMany({ where: { organizationId: orgId } });
+
+      const send = (body: unknown) =>
+        fetch(`${BASE}/api/send`, { method: 'POST', headers: auth, body: JSON.stringify(body) }).then(async (r) => ({
+          status: r.status,
+          body: await r.json(),
+        }));
+
+      // A dry run must not move money. This is the check that would catch a
+      // preview accidentally wired to the real path.
+      const quote = await send({ channel: 'email', subject: 'Hello', body: 'Hi {{name}}', dryRun: true });
+      const afterQuote = await db.spendEntry.count({ where: { organizationId: orgId } });
+      afterQuote === 0 ? ok('a dry run writes nothing to the ledger') : bad(`${afterQuote} ledger rows written by a preview`);
+      quote.body.reach?.reachable > 0
+        ? ok(`the quote states an audience (${quote.body.reach.reachable} reachable of ${quote.body.reach.total})`)
+        : bad('quote reported no reachable audience');
+
+      // The real send must charge exactly what the quote said.
+      const real = await send({ channel: 'email', subject: 'Hello', body: 'Hi {{name}}' });
+      const charged = await db.spendEntry.aggregate({ where: { organizationId: orgId }, _sum: { cents: true, units: true } });
+      real.body.queued === quote.body.reach.reachable
+        ? ok('the send goes to exactly the audience the quote named')
+        : bad(`quoted ${quote.body.reach.reachable}, sent ${real.body.queued}`);
+      (charged._sum.cents ?? 0) === quote.body.projection.exactCents
+        ? ok(`charged what was quoted (${charged._sum.cents}c)`)
+        : bad(`quoted ${quote.body.projection.exactCents}c, charged ${charged._sum.cents}c`);
+
+      // A free send still has to consume the free allowance, or the allowance
+      // never depletes and every send in the month is quoted at zero.
+      (charged._sum.units ?? 0) === real.body.queued
+        ? ok(`a free send still records its ${charged._sum.units} units against the allowance`)
+        : bad(`allowance not tracked: ${charged._sum.units} units for ${real.body.queued} recipients`);
+
+      // A hard cap refuses, and an acknowledgement does not get around it.
+      await fetch(`${BASE}/api/spend`, {
+        method: 'PUT', headers: auth,
+        body: JSON.stringify({ month, channel: 'email', capCents: 1, hardStop: true }),
+      });
+      // Exhaust the free tier so the next send actually costs something.
+      await db.spendEntry.create({
+        data: { organizationId: orgId, channel: 'EMAIL', kind: 'message', certainty: 'exact', cents: 0, units: 5000, note: 'test: allowance used' },
+      });
+      const blocked = await send({ channel: 'email', subject: 'Hello', body: 'Hi' });
+      blocked.status === 402 ? ok('a hard cap refuses the send (402)') : bad(`hard cap returned ${blocked.status}`);
+      const forced = await send({ channel: 'email', subject: 'Hello', body: 'Hi', acknowledgeOverBudget: true });
+      forced.status === 402
+        ? ok('and acknowledging does not get around it — that is what "hard" means')
+        : bad(`acknowledgement bypassed a hard cap: ${forced.status}`);
+
+      // A soft cap warns once, then lets it through.
+      await fetch(`${BASE}/api/spend`, {
+        method: 'PUT', headers: auth,
+        body: JSON.stringify({ month, channel: 'email', capCents: 1, hardStop: false }),
+      });
+      const warned = await send({ channel: 'email', subject: 'Hello', body: 'Hi' });
+      warned.status === 409 && warned.body.needsAcknowledgement
+        ? ok('a soft cap warns first (409)') : bad(`soft cap returned ${warned.status}`);
+      const through = await send({ channel: 'email', subject: 'Hello', body: 'Hi', acknowledgeOverBudget: true });
+      through.body.ok ? ok('and goes through once acknowledged') : bad(`acknowledged send failed: ${through.body.reason}`);
+
+      // SMS is blocked by unpaid registration rather than silently filtered.
+      const sms = await send({ channel: 'sms', body: 'Slots left this week' });
+      sms.status === 422 && /10DLC/i.test(sms.body.reason ?? '')
+        ? ok('an unregistered SMS send is refused, with the reason')
+        : bad(`SMS send returned ${sms.status}: ${sms.body.reason}`);
+
+      // Setting a budget is a financial control, not a connection setting.
+      const analyst = await db.user.findFirst({
+        where: { memberships: { some: { role: { in: ['ANALYST', 'CREATOR', 'GUEST'] } } }, passwordHash: { not: null } },
+      });
+      if (analyst) {
+        const alogin = await fetch(`${BASE}/api/auth/login`, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ email: analyst.email, password: process.env.SEED_PASSWORD || 'demo-password-change-me' }),
+        });
+        const acookie = alogin.headers.get('set-cookie')?.split(';')[0] ?? '';
+        const attempt = await fetch(`${BASE}/api/spend`, {
+          method: 'PUT', headers: { cookie: acookie, 'content-type': 'application/json' },
+          body: JSON.stringify({ month, capCents: 10_000_000 }),
+        });
+        attempt.status === 403
+          ? ok('a non-owner cannot raise the spending cap')
+          : bad(`a non-owner set a budget: ${attempt.status}`);
+      } else {
+        console.log('  SKIP no lower-privileged seeded user to test budget permissions');
+      }
+
+      await db.spendEntry.deleteMany({ where: { organizationId: orgId } });
+      await db.budget.deleteMany({ where: { organizationId: orgId } });
+      await db.emailDelivery.deleteMany({ where: { variationId: { startsWith: 'adhoc:' } } });
     }
   }
 

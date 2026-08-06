@@ -612,3 +612,146 @@ There is now an "Not assigned to a business yet" group.
 behind; the same cleanup that clears test conversions now clears unused test
 uploads, and only when nothing references them — the same check a real delete
 needs.
+
+---
+
+## Phase 5 — The advertising suite: email, text, and what they cost
+
+*Requested as: "an easy to use interface that can do email campaigns, text
+campaigns, connect different services and be upfront about costs and ability to
+project what you will be spending."*
+
+The interesting part of that sentence is **"be upfront about costs"**, because
+it is the part every product in this category gets wrong, and it is not wrong by
+accident. Cost is shown on a final review step, in one blended number, because
+that is the arrangement that maximises the chance the send happens.
+
+So the whole phase is organised around one inversion.
+
+### 5.1 — Three kinds of cost, never one number (`src/lib/pricing.ts`)
+
+The costs in an advertising suite are three different kinds of thing, and
+showing them as one number lies about at least two of them.
+
+| | Certainty | Why |
+|---|---|---|
+| **Per-message** | Exact | Arithmetic on a list size. Computable to the cent before you press the button. |
+| **Fixed** | Exact, and forgotten | $44 to register for SMS, $10/month for a campaign, $1.15/month for a number. On a 400-contact list that is **four times** the message cost. |
+| **Auction** | Estimated | Nobody, including the platform, knows what a click costs tomorrow. A single number here is a guess wearing a decimal point. |
+
+Every price carries its `certainty`, ad rates are ranges with `minDailyCents`,
+and `range()` deliberately never collapses to a midpoint. A projection that
+mixes an exact $4.20 with a guessed $300 and shows "$304.20" is the specific
+dishonesty this phase exists to avoid.
+
+### 5.2 — The invisible character that triples a bill (`src/lib/sms.ts`)
+
+SMS is billed per **segment**, not per message, and how many segments a message
+becomes depends on which characters are in it. A message of only GSM-7
+characters fits 160 per segment. **One character outside that alphabet drops the
+whole message to 70.**
+
+The character that does it is usually invisible. Type an apostrophe in Word,
+Google Docs, Notes, or on any phone keyboard and you get `’` (U+2019), not `'`.
+They render identically in every UI including this one. One is GSM-7 and the
+other is not.
+
+A 130-character promotional text plus the 23-character opt-out is **one** segment
+in GSM-7 and **three** in UCS-2. On a 1,000-person list that is $11.00 instead
+of $33.00, and nothing on screen looks different.
+
+So the module counts segments the way a carrier does, and three details that a
+naive `length / 160` gets wrong all cost money:
+
+- **Concatenation overhead** — a multi-part message carries a header in every
+  part, so capacity is 153, not 160. 161 characters is two segments of 153.
+- **Surrogate pairs** — `😀` is two UTF-16 code units and the carrier bills
+  both. Iterating with `for…of` yields code *points* and undercounts by half.
+- **Escape pairs at a boundary** — `{`, `€`, `[` cost two septets and cannot be
+  split. 153 `€` signs is three segments; `ceil(306/153)` says two.
+
+It then names the culprit by code point, offers the plain equivalent, and
+**never touches an emoji** — an emoji is a choice, not a typo, and silently
+removing one would be editing someone's message rather than fixing an encoding.
+
+### 5.3 — For ads, the cost is exact and the *outcome* is the estimate
+
+This is the inversion most tools get backwards. A $20/day budget for 14 days
+costs $280. Full stop — the auction does not affect it. What the auction affects
+is what you get, and that is reported as a range because the honest answer is a
+range. `projectAds` puts `certainty: 'exact'` on the spend and a low/high on the
+impressions, and the typography sets an estimate lighter than a fact so the two
+are distinguishable without reading a legend.
+
+### 5.4 — Who you can actually reach (`src/lib/audience.ts`)
+
+Every tool shows a contact count. Almost none show the *reachable* count, and
+the two are rarely close. The seeded workspace is 1,285 contacts: **1,131
+emailable, 308 textable.** The gap is phone numbers nobody collected and SMS
+consent nobody asked for.
+
+`PENDING` counts as **no**. A pending SMS consent means someone gave you a phone
+number and never confirmed they want texts; sending anyway is a TCPA violation
+at $500–$1,500 per message. The permissive reading would be a feature that
+generates legal liability proportional to list size.
+
+### 5.5 — The interface (`/send`, `/spend`)
+
+**The price is on screen the entire time, and it changes as you type.** No
+wizard: one page, three sections, and a cost rail that never leaves. The emoji
+that triples the bill gets caught while the sentence is still being written; the
+audience that costs $60 gets narrowed while narrowing it is still a small
+decision. The send button carries the number — "Send to 308 for $61.93" — so the
+whole decision is under the cursor.
+
+`/spend` answers the three questions an owner actually asks, in order: what have
+I spent (fact), where is the month going (arithmetic on the fact), what would
+this new thing cost (a plan, priced before committing).
+
+### 5.6 — The ledger (`SpendEntry`, `Budget`, `SmsDelivery`)
+
+Spend is recorded, not derived. Counting deliveries and multiplying by a rate
+agrees with the ledger until the day a rate changes, at which point last month
+silently reprices and the owner's records stop matching what they were shown at
+the time.
+
+`hardStop` is the point of `Budget`. A budget that only warns is a budget that
+gets exceeded, because the warning arrives while somebody is busy pressing send.
+An owner who set a hard cap asked to be stopped, and being stopped is the
+feature — acknowledging does not get around it.
+
+### What the tests caught
+
+**The free allowance never depleted.** Ledger rows were skipped when the cost
+was zero, which seemed obviously right and was not: allowance consumption is
+tracked by summing `units` on those rows. Every send in the month looked like
+the first one, so the twentieth campaign was quoted at $0.00 and billed. Zero-cost
+*message* rows are now written; zero-cost *fixed* rows still are not, because
+they carry no such meaning.
+
+**A workspace-wide budget could be created twice.** The obvious compound unique
+over `(org, brandId, channel, month)` silently does not work — Postgres treats
+NULLs as distinct, so two caps with both columns null both insert, and the second
+is the cap nobody enforces. Prisma will not even accept nullable columns in an
+upsert's `where`. Folding the nullability into one non-null `scope` string
+(`"all:EMAIL"`) makes the constraint real.
+
+**A channel cap could be handed to the wrong channel.** `orderBy: { channel: 'desc' }`
+to prefer a specific cap over the blanket one picks by alphabet, which would give
+an email send SMS's cap. Both are now read and the specific one chosen by name.
+
+**"Only free is left of your cap."** `money(0)` renders as "free", which is right
+for a price and nonsense for a remaining amount. Split into `money()` for prices
+and `amount()` for quantities.
+
+**The character counter said `99/67`.** The denominator is the per-segment
+capacity, not a budget, so the line read as an overflow. It now says how many
+characters remain before the next segment and what that segment costs across the
+audience.
+
+**The demo had eight contacts.** Every argument this phase makes about spending
+is invisible at that size, and the hand-written segment counts (412, 168, 1,240)
+contradicted the data behind them. The list is now generated to a realistic size
+and distribution from a fixed seed, and segment counts are derived from
+membership rather than declared — a number the UI states confidently and the data
+contradicts is the exact failure this product exists to avoid.

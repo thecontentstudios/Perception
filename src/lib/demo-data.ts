@@ -8,6 +8,7 @@ import type {
   CampaignTemplate,
   ChannelVariation,
   ConnectedAccount,
+  ConsentState,
   Contact,
   ContentItem,
   Conversation,
@@ -29,6 +30,9 @@ import type {
  */
 export const TODAY = '2026-10-08';
 export const NOW = '2026-10-08T09:45';
+/** Window generated contact history is drawn from — never past "today". */
+const HISTORY_START = new Date('2025-01-01T00:00:00Z');
+const HISTORY_DAYS = Math.floor((new Date(`${TODAY}T00:00:00Z`).getTime() - HISTORY_START.getTime()) / 86400000);
 
 // ---------------------------------------------------------------------------
 // Campaign color palette (calendar coding)
@@ -588,15 +592,25 @@ export const APPROVALS: Approval[] = [
 // Contacts & segments
 // ---------------------------------------------------------------------------
 
-export const SEGMENTS: AudienceSegment[] = [
-  { id: 's-north', brandId: 'b-green', name: 'Homeowners — North Side', description: 'Quote requests and past estimates north of Springfield Ave.', contactCount: 412 },
-  { id: 's-past', brandId: 'b-green', name: 'Past Clients', description: 'Completed at least one job in the last 24 months.', contactCount: 168 },
-  { id: 's-news', brandId: 'b-green', name: 'Newsletter', description: 'Monthly tips list from the website signup form.', contactCount: 1240 },
-  { id: 's-wait', brandId: 'b-harbor', name: 'Harbor Lane Waitlist', description: 'Asked to be notified about waterfront-area openings.', contactCount: 57 },
-  { id: 's-trials', brandId: 'b-loop', name: 'Trial Users', description: 'Started a trial in the last 90 days.', contactCount: 389 },
+/**
+ * Lists, with counts derived rather than declared.
+ *
+ * These numbers used to be typed in by hand, which was fine while the demo had
+ * eight contacts and nobody could check. With a real list behind them, a
+ * hand-written count is a number the UI states confidently and the data
+ * contradicts — the exact failure this product is built to avoid. So the count
+ * is computed from the members, and cannot drift.
+ */
+const SEGMENT_DEFS: Omit<AudienceSegment, 'contactCount'>[] = [
+  { id: 's-north', brandId: 'b-green', name: 'Homeowners — North Side', description: 'Quote requests and past estimates north of Springfield Ave.' },
+  { id: 's-past', brandId: 'b-green', name: 'Past Clients', description: 'Completed at least one job in the last 24 months.' },
+  { id: 's-news', brandId: 'b-green', name: 'Newsletter', description: 'Monthly tips list from the website signup form.' },
+  { id: 's-wait', brandId: 'b-harbor', name: 'Harbor Lane Waitlist', description: 'Asked to be notified about waterfront-area openings.' },
+  { id: 's-trials', brandId: 'b-loop', name: 'Trial Users', description: 'Started a trial in the last 90 days.' },
 ];
 
-export const CONTACTS: Contact[] = [
+/** The eight who appear by name on screen, with real activity history. */
+const NAMED_CONTACTS: Contact[] = [
   { id: 'ct-1', name: 'Priya Natarajan', email: 'priya.n@example.com', phone: '(973) 555-0142', brandId: 'b-green', segmentIds: ['s-north', 's-news'], emailConsent: 'subscribed', smsConsent: 'pending', source: 'Quote form', addedAt: '2026-09-21', lastActivity: 'Opened “Fall cleanup is booking fast” · Oct 2' },
   { id: 'ct-2', name: 'Marcus Webb', email: 'marcus.webb@example.com', phone: '(973) 555-0173', brandId: 'b-green', segmentIds: ['s-past', 's-news'], emailConsent: 'subscribed', smsConsent: 'subscribed', source: 'Past client import', addedAt: '2025-04-11', lastActivity: 'Clicked Request a Quote · Oct 4' },
   { id: 'ct-3', name: 'Elena Sørensen', email: 'elena.s@example.com', phone: null, brandId: 'b-green', segmentIds: ['s-news'], emailConsent: 'unsubscribed', smsConsent: 'pending', source: 'Website signup', addedAt: '2026-03-08', lastActivity: 'Unsubscribed · Sep 24' },
@@ -606,6 +620,100 @@ export const CONTACTS: Contact[] = [
   { id: 'ct-7', name: 'Mira Vance', email: 'mira@example.com', phone: '(615) 555-0128', brandId: 'b-velvet', segmentIds: [], emailConsent: 'subscribed', smsConsent: 'subscribed', source: 'Booking system', addedAt: '2026-09-14', lastActivity: 'Session completed · Oct 1' },
   { id: 'ct-8', name: 'Grant Okafor', email: 'grant.o@example.com', phone: null, brandId: 'b-loop', segmentIds: ['s-trials'], emailConsent: 'subscribed', smsConsent: 'pending', source: 'Trial signup', addedAt: '2026-10-03', lastActivity: 'Registered for webinar · Oct 5' },
 ];
+
+/**
+ * The rest of the list.
+ *
+ * The eight contacts above are hand-written because they appear by name in the
+ * UI and carry real activity history. But eight contacts make a cost tool
+ * meaningless: the entire argument this product makes about spending — that
+ * setup costs dominate a small list, that the textable audience is a fraction
+ * of the emailable one — is invisible at that size.
+ *
+ * So the list is filled out to a realistic small-business size with the
+ * distribution that actually shows up in one:
+ *
+ *   - nearly everyone has an email address; barely half have a phone number
+ *   - email consent is mostly clean, because it is collected at signup
+ *   - SMS consent is mostly *pending*, because a phone number written on a
+ *     booking form is not an opt-in, and treating it as one is a TCPA problem
+ *
+ * The gap between "1,240 contacts" and "290 people you may legally text" is
+ * the single most surprising number a first-time SMS sender encounters, and it
+ * needs to be in the demo data or the product cannot show it.
+ *
+ * Generated from a fixed seed rather than Math.random: the numbers on screen
+ * must not change between renders, and a test that asserts a cost needs the
+ * same audience every run.
+ */
+function generatedContacts(): Contact[] {
+  // A small LCG. Deterministic, and obvious enough to read at a glance.
+  let seed = 20260806;
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+  const pick = <T,>(xs: T[]): T => xs[Math.floor(rnd() * xs.length)];
+
+  const first = ['Ana', 'Ben', 'Carla', 'Dmitri', 'Elise', 'Femi', 'Grace', 'Hugo', 'Ines', 'Jonas', 'Kira', 'Luis', 'Maya', 'Noor', 'Omar', 'Petra', 'Quinn', 'Rosa', 'Sami', 'Tessa', 'Umi', 'Vik', 'Wren', 'Xiu', 'Yara', 'Zane', 'Konstantinos', 'Bo'];
+  const last = ['Alvarez', 'Brennan', 'Chen', 'Dubois', 'Eriksen', 'Fitzgerald', 'Gupta', 'Haddad', 'Ibrahim', 'Jensen', 'Kowalczyk', 'Lindqvist', 'Moreau', 'Nakamura', 'Oyelaran', 'Papadopoulos', 'Quintero', 'Ramaswamy', 'Silva', 'Tanaka', 'Ustinov', 'Villanueva', 'Whitfield', 'Xu', 'Yildirim', 'Zhao'];
+  const sources = ['Quote form', 'Website signup', 'Past client import', 'Completed job', 'Booking system', 'Walk-in', 'Referral', 'Trade show'];
+  const areaFor: Record<string, string> = { 'b-green': '973', 'b-harbor': '603', 'b-velvet': '615', 'b-loop': '415' };
+  const sizes: [string, number][] = [['b-green', 486], ['b-harbor', 271], ['b-velvet', 198], ['b-loop', 322]];
+  // Which lists a brand's contacts can land on, and roughly how many do.
+  // Overlapping on purpose: a past client is usually on the newsletter too,
+  // and a segment picker that implies the lists partition the audience is
+  // teaching the owner something false about their own data.
+  const listsFor: Record<string, [string, number][]> = {
+    'b-green': [['s-news', 0.72], ['s-north', 0.45], ['s-past', 0.28]],
+    'b-harbor': [['s-wait', 0.62]],
+    'b-velvet': [],
+    'b-loop': [['s-trials', 0.55]],
+  };
+
+  const out: Contact[] = [];
+  let n = 0;
+  for (const [brandId, count] of sizes) {
+    for (let i = 0; i < count; i++) {
+      n += 1;
+      const name = `${pick(first)} ${pick(last)}`;
+      const hasPhone = rnd() < 0.55;
+      const e = rnd();
+      const emailConsent: ConsentState = e < 0.88 ? 'subscribed' : e < 0.94 ? 'unsubscribed' : 'pending';
+      // Consent for texting is asked for far less often than a number is
+      // collected, so most numbers on file carry no permission to use them.
+      const sc = rnd();
+      const smsConsent: ConsentState = !hasPhone ? 'pending' : sc < 0.45 ? 'subscribed' : sc < 0.6 ? 'unsubscribed' : 'pending';
+      // A uniform day inside [START_OF_HISTORY, the demo clock].
+      //
+      // Picking a random year/month/day independently is the obvious way and
+      // it puts contacts in the future — capping the month is not enough, the
+      // *day* has to be capped in the current month too. Offsetting from a
+      // fixed start by a bounded number of days cannot produce one.
+      const added = new Date(HISTORY_START.getTime() + Math.floor(rnd() * HISTORY_DAYS) * 86400000)
+        .toISOString()
+        .slice(0, 10);
+      out.push({
+        id: `ct-g${n}`,
+        name,
+        email: `${name.toLowerCase().replace(/[^a-z]+/g, '.')}${n}@example.com`,
+        phone: hasPhone ? `(${areaFor[brandId]}) 555-${String(1000 + (n % 8999)).padStart(4, '0')}` : null,
+        brandId,
+        segmentIds: (listsFor[brandId] ?? []).filter(([, p]) => rnd() < p).map(([id]) => id),
+        emailConsent,
+        smsConsent,
+        source: pick(sources),
+        addedAt: added,
+        lastActivity: added,
+      });
+    }
+  }
+  return out;
+}
+
+export const CONTACTS: Contact[] = [...NAMED_CONTACTS, ...generatedContacts()];
+
+export const SEGMENTS: AudienceSegment[] = SEGMENT_DEFS.map((d) => ({
+  ...d,
+  contactCount: CONTACTS.filter((c) => c.segmentIds.includes(d.id)).length,
+}));
 
 // ---------------------------------------------------------------------------
 // Inbox

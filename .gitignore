@@ -33,3 +33,6 @@ yarn-error.log*
 
 # Uploaded media (local storage driver)
 /.media/
+
+# Redis snapshot — a runtime artifact, not source
+dump.rdb
