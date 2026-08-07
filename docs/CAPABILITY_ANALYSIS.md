@@ -295,11 +295,69 @@ real post.
 
 ---
 
-## What is deliberately not on this list
+## The second audit — against the owner's own words (August 7)
 
-- **A second ad-network integration before email works.** Widening before the
-  recommended path functions would be building the demo outward.
-- **Sixteen more publishers.** The worker already fails honestly on an
-  unimplemented channel, which is the correct behaviour to have while waiting.
-- **Improving the cost model.** It is the most finished thing in the codebase.
-  Its problem is not accuracy; it is that nothing downstream of it moves money.
+The ask, restated: *an easy to understand platform where you can see, read and
+upload social media, post across all social medias, run texting and email
+campaigns, and a full ad service with easy to read pricing.*
+
+Measured against the code, not the docs:
+
+| Ask | State | The gap, verified |
+|---|---|---|
+| Post across all social media | **3 of 18 publish** | Bluesky, Mastodon, Facebook Pages — text only |
+| **Upload** — posts that carry images | **Missing entirely** | No publisher touches media. The library uploads and stores; nothing it holds can reach a platform. Blocks Instagram outright |
+| **See / read** — what went out, what happened, who replied | **Half built** | Published posts and real metrics exist; refresh is a button; the inbox hears only SMS — a Facebook comment or Mastodon reply never arrives |
+| Texting and email campaigns | **Done and real** | Send, price, consent, STOP, bounces, quiet hours, reconciliation — Phases 7–10 |
+| Full ad service, readable pricing | **Loop open at the far end** | Plan → brief → estimated spend → settled invoice all work. But a flight's *results* are not shown beside its cost, even though the UTMs to do it are already captured on every conversion |
+
+The pattern in the gaps: **the outbound spine is real, and the product is
+still mute in both directions that make social feel alive** — nothing it
+posts carries a picture, and nothing anyone says back reaches the screen.
+
+## The plan, continued
+
+### Phase 13 — Pictures through the pipe
+
+Media end to end: variation → publisher. Bluesky (`uploadBlob` + embed),
+Mastodon (`/api/v2/media` + attachment), Facebook (`/photos` edge). The
+library, alt-text checks and storage already exist — this is the missing
+last mile. Acceptance: a post with an image arrives on all three platforms
+with its alt text; a variation whose image is missing fails preflight, not
+publish.
+
+### Phase 14 — Instagram and Threads
+
+Both unblock the moment media flows. Instagram container → publish (media
+required — the refusal for caption-only posts is honest, stated in the
+composer). Threads is text-friendly and Meta-shaped. Takes the registry to
+5 of 18, and the two it adds are the two the fit ranking actually
+recommends after Facebook.
+
+### Phase 15 — The product can hear
+
+Replies into the inbox from the platforms we already hold grants for:
+Mastodon notifications and Bluesky mentions/replies via polling (both APIs
+support it today, no new approval queues), Facebook comment webhooks where
+review allows. Every reply lands as a `Conversation` beside the SMS ones.
+Also: the metrics refresher moves from a button to the worker on a visible
+schedule, with its last-run time on screen — a stale number must look stale.
+
+### Phase 16 — Close the ad loop
+
+The flight's results beside its money. Conversions already carry
+`utmCampaign`; flights already stamp `utm_source`/`utm_campaign` on their
+destination. Join them: each flight shows clicks, conversions and revenue it
+caused, and cost per result computed only from settled spend — exact money
+over measured outcomes, the range carried, never a blended average.
+
+### Phase 17 — The rest of the registry, tiered honestly
+
+- **Feasible now:** Pinterest, Reddit, Google Business Profile.
+- **Paid or approval-gated:** X (paid API), LinkedIn, TikTok, YouTube,
+  WhatsApp — build behind the same contract, ship as each account clears.
+- **No organic API exists:** Nextdoor, Snapchat — the screen says so and
+  routes their budget to the ad brief instead. An honest "cannot" outranks
+  a fake "soon".
+
+## What is deliberately not on this list
