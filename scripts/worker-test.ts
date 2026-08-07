@@ -257,6 +257,8 @@ async function main() {
 
   await mediaSection();
 
+  await metaFamilySection();
+
   await cleanup();
 }
 
@@ -417,7 +419,7 @@ async function facebookSection() {
     // The platform reports numbers — set them, read them through the adapter.
     await fetch(`${META}/__insights`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ id: posted.id, impressions: 4180, reactions: 23, comments: 5, shares: 4 }),
+      body: JSON.stringify({ id: posted.id, post_impressions: 4180, reactions: 23, comments: 5, shares: 4 }),
     });
     const m = await facebookPublisher.fetchMetrics!(posted.id!);
     m.ok && m.metrics?.impressions === 4180
@@ -600,6 +602,101 @@ async function mediaSection() {
         await db.channelVariation.deleteMany({ where: { id: vid } });
       }
     }
+  }
+}
+
+
+/**
+ * Phase 14 — Instagram and Threads, the two-step half of the Meta family.
+ *
+ * Same container → publish dance, opposite relationships to media: an
+ * Instagram feed post *is* a photo and the API has no caption-only shape,
+ * while Threads is text-first with images optional. The refusals are as much
+ * the product as the successes.
+ */
+async function metaFamilySection() {
+  console.log('\n== Instagram and Threads: the two-step, and honest refusals ==');
+
+  const META = process.env.META_BASE_URL || 'http://localhost:4325';
+  process.env.THREADS_BASE_URL = META;
+  await fetch(`${META}/__reset`, { method: 'POST' });
+
+  const { instagramPublisher, threadsPublisher } = await import('../src/lib/publishers/meta-family');
+  const { measurabilityOf } = await import('../src/lib/measurability');
+
+  const bytes = new TextEncoder().encode('stand-in-image-bytes');
+  const withUrl = [{ bytes, mime: 'image/jpeg', altText: 'Fresh mulch, ready to spread', publicUrl: 'https://media.example.test/mulch.jpg' }];
+
+  saveGrant({
+    channel: 'instagram', accessToken: process.env.MOCK_META_TOKEN || 'mock-page-token',
+    refreshToken: null, expiresInSec: null, scopes: ['instagram_content_publish'],
+    accountLabel: '@summitlocal', externalAccountId: process.env.MOCK_META_IG_ID || '17840000000001',
+  });
+  saveGrant({
+    channel: 'threads', accessToken: process.env.MOCK_META_TOKEN || 'mock-page-token',
+    refreshToken: null, expiresInSec: null, scopes: ['threads_content_publish'],
+    accountLabel: '@summitlocal', externalAccountId: process.env.MOCK_META_THREADS_ID || '9990000000001',
+  });
+
+  try {
+    // The Instagram refusals, which are facts about the platform.
+    const noMedia = await instagramPublisher.publish('A caption with no photo.', {});
+    !noMedia.ok && /no text-only posts/.test(noMedia.error ?? '')
+      ? ok('instagram refuses a text-only post, in words about the platform')
+      : bad(`text-only IG: ${JSON.stringify(noMedia).slice(0, 120)}`);
+
+    const noUrl = await instagramPublisher.publish('A photo with no public address.', {
+      media: [{ bytes, mime: 'image/jpeg', altText: null }],
+    });
+    !noUrl.ok && /public URL/.test(noUrl.error ?? '')
+      ? ok('instagram refuses an unfetchable image instead of handing Meta localhost')
+      : bad(`no-url IG: ${JSON.stringify(noUrl).slice(0, 120)}`);
+
+    // The real thing: container, then publish.
+    const igPost = await instagramPublisher.publish('New beds going in this week.', { media: withUrl });
+    igPost.ok ? ok(`instagram: two-step publish landed (${igPost.id})`) : bad(`IG publish: ${igPost.error}`);
+    const wire1 = await fetch(`${META}/__posts`).then((r) => r.json());
+    const ig = wire1.posts.find((p: { id: string }) => String(p.id).startsWith('instagram_'));
+    ig?.imageUrl === withUrl[0].publicUrl && ig?.text === 'New beds going in this week.'
+      ? ok('instagram: the container carried the image url and caption')
+      : bad(`IG wire: ${JSON.stringify(ig).slice(0, 140)}`);
+    ig?.altText === withUrl[0].altText
+      ? ok('instagram: alt text survived')
+      : bad(`IG alt: ${ig?.altText}`);
+
+    // Threads: text-first.
+    const thText = await threadsPublisher.publish('Quick note: we are booking spring slots.', {});
+    thText.ok ? ok(`threads: a text-only post is a post (${thText.id})`) : bad(`threads text: ${thText.error}`);
+
+    const thImg = await threadsPublisher.publish('And a photo.', { media: withUrl });
+    thImg.ok ? ok('threads: with an image when one is fetchable') : bad(`threads image: ${thImg.error}`);
+
+    // Metrics: views are Threads' name for reach; both come back as numbers.
+    await fetch(`${META}/__insights`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: thText.id, views: 903, likes: 12, replies: 3, reposts: 2, quotes: 1 }),
+    });
+    const tm = await threadsPublisher.fetchMetrics!(thText.id!);
+    tm.ok && tm.metrics?.impressions === 903 && tm.metrics?.engagements === 18
+      ? ok('threads: views 903 and engagement 18 read back through the adapter')
+      : bad(`threads metrics: ${JSON.stringify(tm)}`);
+
+    await fetch(`${META}/__insights`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: igPost.id, impressions: 2411, likes: 41, comments: 6, shares: 2 }),
+    });
+    const im = await instagramPublisher.fetchMetrics!(igPost.id!);
+    im.ok && im.metrics?.impressions === 2411 && im.metrics?.engagements === 49
+      ? ok('instagram: impressions 2,411 and engagement 49 read back')
+      : bad(`IG metrics: ${JSON.stringify(im)}`);
+
+    measurabilityOf('instagram', 'impressions', { connected: ['instagram'] }).state === 'measured' &&
+    measurabilityOf('threads', 'impressions', { connected: ['threads'] }).state === 'measured'
+      ? ok('the report marks both channels measured once connected')
+      : bad('measurability disagrees with the readers that exist');
+  } finally {
+    removeGrant('instagram');
+    removeGrant('threads');
   }
 }
 

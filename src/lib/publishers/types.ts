@@ -71,6 +71,14 @@ export interface MediaAttachment {
   bytes: Uint8Array;
   mime: string;
   altText: string | null;
+  /**
+   * Where the platform can fetch this image itself, when it insists on doing
+   * so. Instagram's Graph endpoint takes `image_url` and downloads it — there
+   * is no byte-upload path for feed photos — which means publishing there
+   * requires the media library to be publicly reachable. Absent in tests and
+   * on localhost, and the Instagram adapter says so instead of guessing.
+   */
+  publicUrl?: string;
 }
 
 export interface Publisher {

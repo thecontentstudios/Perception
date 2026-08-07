@@ -183,7 +183,16 @@ export async function runPublishJob(data: PublishJobData): Promise<JobResult> {
       if (asset.asset.kind !== 'image') continue;
       try {
         const bytes = await storage().get(asset.asset.storageKey);
-        media.push({ bytes, mime: asset.asset.mimeType, altText: asset.asset.altText });
+        const base = (process.env.APP_URL ?? '').replace(/\/+$/, '');
+        media.push({
+          bytes,
+          mime: asset.asset.mimeType,
+          altText: asset.asset.altText,
+          // For the platforms that fetch rather than accept an upload.
+          // Honest only when APP_URL is a public address; the adapters that
+          // need it check and refuse rather than hand Instagram localhost.
+          publicUrl: base ? `${base}/api/media/file/${asset.asset.storageKey}` : undefined,
+        });
       } catch {
         await db.channelVariation.update({
           where: { id: variationId },

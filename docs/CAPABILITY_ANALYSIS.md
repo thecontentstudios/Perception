@@ -20,7 +20,7 @@ to the cent. What has not kept pace is the part that touches the outside world.
 | Server surface (`src/app/api`) | ~3,700 lines | Real, authenticated, tenant-scoped |
 | Worker + queue | ~420 lines | Real; fires scheduled posts |
 | Tests | ~4,800 lines | 719 checks, five suites |
-| **Channels that can actually publish** | **3 of 18** | Bluesky, Mastodon, Facebook Pages |
+| **Channels that can actually publish** | **5 of 18** | Bluesky, Mastodon, Facebook, Instagram, Threads |
 | **Channels that can actually send** | **2 of 2** | Email through Resend, SMS through Twilio |
 | **Ad platforms that can actually buy** | **0 of 11** | Priced, planned, never purchased |
 
@@ -331,13 +331,17 @@ alt text intact and byte-for-byte length verified; a variation whose approved
 image has vanished from storage fails the job *before* anything is posted —
 a text-only stand-in for a photo post is a different post nobody approved.
 
-### Phase 14 — Instagram and Threads
+### Phase 14 — Instagram and Threads — **done**
 
-Both unblock the moment media flows. Instagram container → publish (media
-required — the refusal for caption-only posts is honest, stated in the
-composer). Threads is text-friendly and Meta-shaped. Takes the registry to
-5 of 18, and the two it adds are the two the fit ranking actually
-recommends after Facebook.
+The two-step half of the Meta family: container → publish, one shared dance,
+opposite relationships to media. An Instagram feed post *is* a photo — the
+API has no caption-only shape, and the adapter says so instead of faking a
+text card. Instagram also fetches images from a public URL rather than
+accepting bytes, so `MediaAttachment` grew `publicUrl` and the adapter
+refuses an unfetchable image instead of handing Meta localhost. Threads is
+text-first with images optional. Both report reach (`impressions` / `views`)
+and both readers feed the report; registry at 5 of 18, and the two added are
+the two the fit ranking recommends after Facebook.
 
 ### Phase 15 — The product can hear
 

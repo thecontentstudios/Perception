@@ -25,6 +25,10 @@ const crypto = require('node:crypto');
 const port = Number(process.argv[2] || 4325);
 const TOKEN = process.env.MOCK_META_TOKEN || 'mock-page-token';
 const PAGE_ID = process.env.MOCK_META_PAGE_ID || '108000000001';
+const IG_ID = process.env.MOCK_META_IG_ID || '17840000000001';
+const THREADS_ID = process.env.MOCK_META_THREADS_ID || '9990000000001';
+/** Containers created and not yet published — the two-step's middle state. */
+const containers = new Map();
 
 const posts = [];
 const insights = new Map();
@@ -52,6 +56,7 @@ http
     if (url.pathname === '/__reset' && req.method === 'POST') {
       posts.length = 0;
       insights.clear();
+      containers.clear();
       revoked = false;
       return send(res, 200, { ok: true });
     }
@@ -61,13 +66,13 @@ http
       return send(res, 200, { ok: true });
     }
     if (url.pathname === '/__insights' && req.method === 'POST') {
+      // Stores whatever metric names the test supplies; the insights GET
+      // answers with whichever names the adapter asks for. One mechanism
+      // serves post_impressions, impressions, views and friends.
       const b = JSON.parse(raw || '{}');
-      insights.set(String(b.id), {
-        impressions: Number(b.impressions) || 0,
-        reactions: Number(b.reactions) || 0,
-        comments: Number(b.comments) || 0,
-        shares: Number(b.shares) || 0,
-      });
+      const id = String(b.id);
+      delete b.id;
+      insights.set(id, Object.fromEntries(Object.entries(b).map(([k, v]) => [k, Number(v) || 0])));
       return send(res, 200, { ok: true });
     }
 
@@ -96,6 +101,36 @@ http
       return graphError(res, 401, 190, 'Error validating access token: the session is invalid.');
     }
 
+    // Instagram and Threads share the container → publish dance.
+    const containerRoutes = [
+      { create: `/v21.0/${IG_ID}/media`, publish: `/v21.0/${IG_ID}/media_publish`, kind: 'instagram', requireImage: true },
+      { create: `/v1.0/${THREADS_ID}/threads`, publish: `/v1.0/${THREADS_ID}/threads_publish`, kind: 'threads', requireImage: false },
+    ];
+    for (const r of containerRoutes) {
+      if (url.pathname === r.create && req.method === 'POST') {
+        if (r.requireImage && !params.get('image_url')) {
+          return graphError(res, 400, 100, 'Media type requires image_url.');
+        }
+        const id = `cont_${crypto.randomBytes(6).toString('hex')}`;
+        containers.set(id, {
+          kind: r.kind,
+          text: params.get('caption') ?? params.get('text') ?? '',
+          imageUrl: params.get('image_url') || null,
+          altText: params.get('alt_text') || null,
+          mediaType: params.get('media_type') || (r.kind === 'instagram' ? 'IMAGE' : null),
+        });
+        return send(res, 200, { id });
+      }
+      if (url.pathname === r.publish && req.method === 'POST') {
+        const c = containers.get(params.get('creation_id') || '');
+        if (!c) return graphError(res, 400, 100, 'Invalid creation_id.');
+        containers.delete(params.get('creation_id'));
+        const id = `${r.kind}_${crypto.randomBytes(8).toString('hex')}`;
+        posts.push({ id, ...c });
+        return send(res, 200, { id });
+      }
+    }
+
     // POST /v21.0/{page-id}/feed — publish to the Page.
     if (url.pathname === `/v21.0/${PAGE_ID}/feed` && req.method === 'POST') {
       const message = params.get('message');
@@ -106,15 +141,16 @@ http
     }
 
     // GET /v21.0/{post-id}/insights?metric=post_impressions
-    const insightsMatch = /^\/v21\.0\/([^/]+)\/insights$/.exec(url.pathname);
+    const insightsMatch = /^\/v(?:21|1)\.0\/([^/]+)\/insights$/.exec(url.pathname);
     if (insightsMatch && req.method === 'GET') {
       const id = insightsMatch[1];
       if (!posts.some((p) => p.id === id)) {
         return graphError(res, 404, 100, 'Unsupported get request. Object does not exist.');
       }
-      const i = insights.get(id) || { impressions: 0 };
+      const stored = insights.get(id) || {};
+      const asked = (url.searchParams.get('metric') || 'post_impressions').split(',');
       return send(res, 200, {
-        data: [{ name: 'post_impressions', period: 'lifetime', values: [{ value: i.impressions }] }],
+        data: asked.map((name) => ({ name, period: 'lifetime', values: [{ value: stored[name] ?? 0 }] })),
       });
     }
 
@@ -124,12 +160,12 @@ http
       const id = postMatch[1];
       const post = posts.find((p) => p.id === id);
       if (!post) return graphError(res, 404, 100, 'Unsupported get request. Object does not exist.');
-      const i = insights.get(id) || { reactions: 0, comments: 0, shares: 0 };
+      const i = insights.get(id) || {};
       return send(res, 200, {
         id,
-        reactions: { summary: { total_count: i.reactions } },
-        comments: { summary: { total_count: i.comments } },
-        shares: { count: i.shares },
+        reactions: { summary: { total_count: i.reactions ?? 0 } },
+        comments: { summary: { total_count: i.comments ?? 0 } },
+        shares: { count: i.shares ?? 0 },
       });
     }
 
