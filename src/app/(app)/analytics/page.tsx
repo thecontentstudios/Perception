@@ -194,6 +194,7 @@ export default function AnalyticsPage() {
     totalConversions: number;
     availability?: Record<string, Record<string, { state: string; reason: string }>>;
     summary?: string;
+    metricsAsOf?: string | null;
     clickReconciliation?: { provider: number; tracked: number; gap: number; notable: boolean; explanation: string };
   } | null>(null);
 
@@ -287,7 +288,11 @@ export default function AnalyticsPage() {
         <span style={{ fontSize: 12, color: 'var(--ink-2)' }}>
           {computed
             ? meta && meta.totalConversions > 0
-              ? `${meta.attributedConversions} of ${meta.totalConversions} results traced to a specific post. ${meta.summary ?? ''}`
+              ? `${meta.attributedConversions} of ${meta.totalConversions} results traced to a specific post. ${meta.summary ?? ''}${
+                  meta.metricsAsOf
+                    ? ` Platform numbers as of ${new Date(meta.metricsAsOf).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}.`
+                    : ''
+                }`
               : 'Clicks, leads and revenue are measured from tracked links and form events. Impressions, engagement and ad spend need a platform connection.'
             : 'Connect a database and publish a tracked post to see your own numbers here.'}
         </span>

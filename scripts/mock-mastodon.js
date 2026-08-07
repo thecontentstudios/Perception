@@ -22,6 +22,8 @@ const byKey = new Map();
 const engagement = new Map();
 /** Uploaded media, by id, so a status can reference it. */
 const mediaStore = new Map();
+/** Notifications a test has staged, newest first, the way Mastodon returns them. */
+const notifications = [];
 
 const send = (res, status, body) => {
   res.writeHead(status, { 'content-type': 'application/json' });
@@ -98,6 +100,31 @@ http
       });
     }
 
+    // GET /api/v1/notifications — mentions and replies for the inbox poll.
+    if (req.url.startsWith('/api/v1/notifications') && req.method === 'GET') {
+      if (auth !== TOKEN) return send(res, 401, { error: 'The access token is invalid' });
+      return send(res, 200, notifications);
+    }
+
+    // Stage a notification: {type, from, text, statusId}
+    if (req.url === '/__notify' && req.method === 'POST') {
+      let body = '';
+      req.on('data', (c) => (body += c));
+      return req.on('end', () => {
+        const b = JSON.parse(body || '{}');
+        notifications.unshift({
+          id: String(9000 + notifications.length),
+          type: b.type || 'mention',
+          created_at: new Date().toISOString(),
+          account: { display_name: b.from || 'Casey Reyes', acct: (b.from || 'casey').toLowerCase().replace(/\s+/g, '') },
+          status: b.statusId || b.text
+            ? { id: String(b.statusId ?? 5000 + notifications.length), content: `<p>${b.text ?? ''}</p>` }
+            : undefined,
+        });
+        send(res, 200, { ok: true, staged: notifications.length });
+      });
+    }
+
     // Test introspection, not part of the Mastodon API.
     if (req.url === '/__posts') return send(res, 200, { count: posts.length, posts });
 
@@ -138,6 +165,7 @@ http
       byKey.clear();
       engagement.clear();
       mediaStore.clear();
+      notifications.length = 0;
       return send(res, 200, { reset: true });
     }
 

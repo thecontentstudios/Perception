@@ -343,14 +343,17 @@ text-first with images optional. Both report reach (`impressions` / `views`)
 and both readers feed the report; registry at 5 of 18, and the two added are
 the two the fit ranking recommends after Facebook.
 
-### Phase 15 — The product can hear
+### Phase 15 — The product can hear — **done**
 
-Replies into the inbox from the platforms we already hold grants for:
-Mastodon notifications and Bluesky mentions/replies via polling (both APIs
-support it today, no new approval queues), Facebook comment webhooks where
-review allows. Every reply lands as a `Conversation` beside the SMS ones.
-Also: the metrics refresher moves from a button to the worker on a visible
-schedule, with its last-run time on screen — a stale number must look stale.
+Replies into the inbox through the grants already held: Mastodon mentions and
+Bluesky replies/mentions/quotes, polled by the worker every few minutes.
+Idempotency comes from the platform's own ids in `externalRef` — polling
+twice cannot write twice, so there is no cursor state to corrupt. A like is
+deliberately not a conversation: the metrics reader counts it, but the inbox
+only asks the owner to answer words. Both the inbox poll and the metrics
+refresh (now a worker duty, not a button) write a visible last-run, and the
+report says "platform numbers as of" — a stale number can look stale.
+Facebook comment webhooks wait on app review, stated rather than faked.
 
 ### Phase 16 — Close the ad loop
 

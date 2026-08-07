@@ -60,6 +60,8 @@ export interface PerformanceMeta {
   totalConversions: number;
   /** Two independent click counts, shown side by side rather than merged. */
   clickReconciliation?: ClickReconciliation;
+  /** When the platform numbers were last read. Null means never. */
+  metricsAsOf: string | null;
 }
 
 export interface ComputedPerformance {
@@ -298,6 +300,13 @@ export async function computePerformance(organizationId: string): Promise<Comput
       totalConversions: conversions.length,
       // Only worth computing, and only meaningful, when email was used.
       clickReconciliation: used.includes('email') ? await reconcileClicks(organizationId) : undefined,
+      metricsAsOf: (
+        await db.auditEvent.findFirst({
+          where: { organizationId, action: 'metrics.refreshed' },
+          orderBy: { at: 'desc' },
+          select: { at: true },
+        })
+      )?.at.toISOString() ?? null,
     },
   };
 }

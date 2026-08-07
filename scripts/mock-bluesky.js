@@ -22,6 +22,7 @@ const TOKEN = process.env.MOCK_BSKY_TOKEN || 'mock-bsky-access-jwt';
 
 const records = [];
 const blobs = new Map();
+const notifications = [];
 
 const send = (res, status, body) => {
   res.writeHead(status, { 'content-type': 'application/json' });
@@ -42,9 +43,28 @@ http
     if (req.url === '/__reset' && req.method === 'POST') {
       records.length = 0;
       blobs.clear();
+      notifications.length = 0;
       return send(res, 200, { ok: true });
     }
     if (req.url === '/__posts') return send(res, 200, { count: records.length, records });
+
+    if (req.url.startsWith('/xrpc/app.bsky.notification.listNotifications') && req.method === 'GET') {
+      if (auth !== TOKEN) return send(res, 400, { error: 'InvalidToken', message: 'invalid token' });
+      return send(res, 200, { notifications });
+    }
+
+    // Stage a notification: {reason, handle, text, uri}
+    if (req.url === '/__notify' && req.method === 'POST') {
+      const body = JSON.parse((await readBody(req)).toString() || '{}');
+      notifications.unshift({
+        uri: body.uri || `at://did:plc:someone/app.bsky.feed.post/${crypto.randomBytes(5).toString('hex')}`,
+        reason: body.reason || 'reply',
+        indexedAt: new Date().toISOString(),
+        author: { handle: body.handle || 'casey.bsky.social', displayName: body.from || 'Casey Reyes' },
+        record: { text: body.text || '' },
+      });
+      return send(res, 200, { ok: true, staged: notifications.length });
+    }
 
     if (req.url === '/xrpc/com.atproto.repo.uploadBlob' && req.method === 'POST') {
       if (auth !== TOKEN) return send(res, 400, { error: 'InvalidToken', message: 'invalid token' });

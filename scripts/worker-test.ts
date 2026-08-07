@@ -259,6 +259,8 @@ async function main() {
 
   await metaFamilySection();
 
+  await listenSection();
+
   await cleanup();
 }
 
@@ -698,6 +700,115 @@ async function metaFamilySection() {
     removeGrant('instagram');
     removeGrant('threads');
   }
+}
+
+
+/**
+ * Phase 15 — the product can hear.
+ *
+ * Publishing without listening is a megaphone: for eleven phases the only
+ * thing that ever wrote a social conversation was the seed. This stages a
+ * Mastodon mention and a Bluesky reply on the stand-ins, polls through the
+ * real listener, and checks the three properties that matter — words arrive,
+ * likes do not, and polling twice cannot write twice.
+ */
+async function listenSection() {
+  console.log('\n== Replies reach the inbox, and a like is not a conversation ==');
+
+  const BSKY = process.env.BLUESKY_PDS_URL || 'http://localhost:4326';
+  await fetch(`${MOCK}/__reset`, { method: 'POST' });
+  await fetch(`${BSKY}/__reset`, { method: 'POST' });
+
+  const { pollSocialInbox } = await import('../src/lib/listen');
+
+  saveGrant({
+    channel: 'mastodon', accessToken: process.env.MOCK_TOKEN || 'mock-access-token',
+    refreshToken: null, expiresInSec: null, scopes: ['read:notifications'],
+    accountLabel: '@greenscape', externalAccountId: `${HOST}|1|500`,
+  });
+  saveGrant({
+    channel: 'bluesky', accessToken: process.env.MOCK_BSKY_TOKEN || 'mock-bsky-access-jwt',
+    refreshToken: 'mock-refresh', expiresInSec: 7200, scopes: ['app-password session'],
+    accountLabel: '@greenscape.bsky.social', externalAccountId: 'did:plc:mockmockmock',
+  });
+
+  try {
+    await fetch(`${MOCK}/__notify`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'mention', from: 'Dana Whitfield', text: 'Do you service the north side? Would love a quote.', statusId: 777001 }),
+    });
+    await fetch(`${MOCK}/__notify`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'favourite', from: 'A Fan', statusId: 777002 }),
+    });
+    await fetch(`${BSKY}/__notify`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ reason: 'reply', from: 'Marcus Cole', text: 'Booked for Tuesday - thanks!', uri: 'at://did:plc:marcus/app.bsky.feed.post/replyone' }),
+    });
+    await fetch(`${BSKY}/__notify`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ reason: 'like', from: 'Quiet Fan' }),
+    });
+
+    const before = await db.conversation.count({ where: { organizationId: ORG_ID, channel: { in: ['MASTODON', 'BLUESKY'] } } });
+    const first = await pollSocialInbox(ORG_ID);
+    first.created === 2
+      ? ok('two conversations arrived: a Mastodon mention and a Bluesky reply')
+      : bad(`created ${first.created}, errors: ${JSON.stringify(first.errors)}`);
+
+    const rows = await db.conversation.findMany({
+      where: { organizationId: ORG_ID, channel: { in: ['MASTODON', 'BLUESKY'] }, externalRef: { not: null } },
+      orderBy: { receivedAt: 'desc' },
+    });
+    rows.some((r) => r.fromName === 'Dana Whitfield' && /north side/.test(r.excerpt) && r.channel === 'MASTODON')
+      ? ok('the mention carries who said it and what they said, HTML stripped')
+      : bad(`mastodon row: ${JSON.stringify(rows.find((r) => r.channel === 'MASTODON'))?.slice(0, 140)}`);
+    rows.some((r) => r.fromName === 'Marcus Cole' && r.kind === 'comment' && r.channel === 'BLUESKY')
+      ? ok('the reply landed as a comment from its author')
+      : bad('bluesky reply missing or mislabelled');
+    !rows.some((r) => /Fan/.test(r.fromName))
+      ? ok('a like is engagement, not mail — the inbox does not ask you to answer a heart')
+      : bad('a like became a conversation');
+
+    const second = await pollSocialInbox(ORG_ID);
+    second.created === 0 && second.duplicates >= 2
+      ? ok(`polling again writes nothing (${second.duplicates} already seen) — no cursor to corrupt`)
+      : bad(`second poll created ${second.created}`);
+
+    const audit = await db.auditEvent.findFirst({
+      where: { organizationId: ORG_ID, action: 'inbox.polled' },
+      orderBy: { at: 'desc' },
+    });
+    audit ? ok(`the poll left its visible last-run (${audit.detail})`) : bad('no inbox.polled audit row');
+
+    // The metrics side of "the product can hear": refresh writes its own
+    // last-run, and the report carries it as "as of".
+    await refreshMetricsProof();
+
+    // Cleanup the staged conversations.
+    await db.conversation.deleteMany({
+      where: { organizationId: ORG_ID, externalRef: { in: rows.map((r) => r.externalRef!).filter(Boolean) } },
+    });
+    void before;
+  } finally {
+    removeGrant('mastodon');
+    removeGrant('bluesky');
+  }
+}
+
+async function refreshMetricsProof() {
+  const { refreshPlatformMetrics } = await import('../src/lib/metrics');
+  const { computePerformance } = await import('../src/lib/analytics');
+  await refreshPlatformMetrics(ORG_ID);
+  const audit = await db.auditEvent.findFirst({
+    where: { organizationId: ORG_ID, action: 'metrics.refreshed' },
+    orderBy: { at: 'desc' },
+  });
+  audit ? ok(`metrics refresh leaves its last-run too (${audit.detail})`) : bad('no metrics.refreshed audit row');
+  const perf = await computePerformance(ORG_ID);
+  perf.meta.metricsAsOf && Date.now() - new Date(perf.meta.metricsAsOf).getTime() < 60_000
+    ? ok('and the report says when its numbers are from — a stale number can look stale')
+    : bad(`metricsAsOf: ${perf.meta.metricsAsOf}`);
 }
 
 /** Leave the demo workspace exactly as found, so the suite re-runs. */

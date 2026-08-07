@@ -148,6 +148,18 @@ export async function refreshPlatformMetrics(
   }
 
   out.skipped = [...skipped];
+
+  // The visible last-run. Refresh moving into the worker is only safe if a
+  // stale number looks stale — this row is what "as of" on the screen reads.
+  await db.auditEvent.create({
+    data: {
+      organizationId,
+      actorUserId: null,
+      action: 'metrics.refreshed',
+      target: out.skipped.join(',') || 'all',
+      detail: `read ${out.written} of ${out.attempted}${out.missing ? `, ${out.missing} gone` : ''}${out.failed.length ? `, ${out.failed.length} failed` : ''}`,
+    },
+  });
   return out;
 }
 

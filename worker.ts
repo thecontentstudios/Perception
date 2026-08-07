@@ -20,6 +20,8 @@ import { PUBLISH_QUEUE, redisConnection, type PublishJobData } from './src/lib/q
 import { scanAndEnqueue } from './src/lib/queue/scheduler';
 import { runPublishJob } from './src/lib/queue/publish-job';
 import { dispatchAll } from './src/lib/queue/dispatch';
+import { pollSocialInbox } from './src/lib/listen';
+import { refreshPlatformMetrics } from './src/lib/metrics';
 import { db } from './src/lib/db';
 
 const SCAN_INTERVAL_MS = Number(process.env.SCAN_INTERVAL_MS || 30_000);
@@ -83,11 +85,39 @@ async function scan() {
 const timer = setInterval(scan, SCAN_INTERVAL_MS);
 void scan();
 
+/**
+ * The listening pass: social replies into the inbox, platform numbers into
+ * the report. Minutes apart rather than seconds — notifications and like
+ * counts move at human speed, and each pass spends the owner's API quota.
+ * Both writes an audit row, which is what lets the screen say "as of".
+ */
+const LISTEN_INTERVAL_MS = Number(process.env.LISTEN_INTERVAL_MS || 5 * 60_000);
+let listening = false;
+async function listen() {
+  if (listening) return;
+  listening = true;
+  try {
+    for (const org of await db.organization.findMany({ select: { id: true } })) {
+      const heard = await pollSocialInbox(org.id);
+      if (heard.created > 0) log(`inbox: ${heard.created} new from ${heard.checked.join(', ')}`);
+      const read = await refreshPlatformMetrics(org.id, { limit: 100 });
+      if (read.written > 0) log(`metrics: ${read.written} readings`);
+    }
+  } catch (e) {
+    log('listen failed:', (e as Error).message);
+  } finally {
+    listening = false;
+  }
+}
+const listenTimer = setInterval(listen, LISTEN_INTERVAL_MS);
+void listen();
+
 log(`worker up — scanning every ${SCAN_INTERVAL_MS / 1000}s, concurrency 4`);
 
 async function shutdown(signal: string) {
   log(`${signal} — finishing in-flight jobs`);
   clearInterval(timer);
+  clearInterval(listenTimer);
   await worker.close();
   await db.$disconnect();
   process.exit(0);
