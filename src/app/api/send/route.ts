@@ -9,7 +9,7 @@ import { sendingStatus } from '@/lib/senders/registry';
 import { allocateCents, spendSplit } from '@/lib/billing';
 import { normalizeAddress, suppressedAmong } from '@/lib/suppression';
 import type { Contact } from '@/lib/types';
-import { budgetScope, monthKey } from '../spend/route';
+import { budgetScope, monthKey } from '@/lib/ledger';
 
 export const dynamic = 'force-dynamic';
 

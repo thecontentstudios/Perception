@@ -27,6 +27,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const MOCK_PORT = Number(process.env.MOCK_PORT || 4321);
 const HOST = `localhost:${MOCK_PORT}`;
+const MOCK = `http://${HOST}`;
 const TEST_ID = 'v-worker-test';
 const ORG_ID = 'org-1';
 
@@ -81,6 +82,7 @@ async function main() {
   const item = await db.contentItem.findFirst({ where: { campaign: { status: 'ACTIVE' } } });
   if (!item) return bad('no content item to attach a test post to');
 
+  await db.metric.deleteMany({ where: { variationId: TEST_ID } });
   await db.publicationAttempt.deleteMany({ where: { variationId: TEST_ID } });
   await db.publishedPost.deleteMany({ where: { variationId: TEST_ID } });
   await db.channelVariation.deleteMany({ where: { id: TEST_ID } });
@@ -249,7 +251,118 @@ async function main() {
     ? ok('both attempts recorded, in order, with their outcomes')
     : bad(`expected a failed then a successful attempt, got ${attemptsNow.map((a) => a.success).join(',')}`);
 
+  await metricsSection();
+
   await cleanup();
+}
+
+/**
+ * Phase 11 — the platform's own numbers, and the ones it will never give.
+ *
+ * The post published above is still up on the stand-in, so this reads it back
+ * the way the refresher does in production.
+ */
+async function metricsSection() {
+  console.log('\n== Reading the numbers back off the platform ==');
+
+  const { refreshPlatformMetrics } = await import('../src/lib/metrics');
+  const { measurabilityOf } = await import('../src/lib/measurability');
+
+  const post = await db.publishedPost.findUnique({ where: { variationId: TEST_ID } });
+  if (!post) return bad('nothing was published, so there is nothing to measure');
+
+  // Give the post some engagement the platform will report.
+  await fetch(`${MOCK}/__engage`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ id: post.externalId, favourites: 7, reblogs: 3, replies: 2 }),
+  });
+
+  const first = await refreshPlatformMetrics(ORG_ID);
+  first.written === 1
+    ? ok(`read one post's numbers off the platform (attempted ${first.attempted})`)
+    : bad(`expected 1 reading, got ${first.written} of ${first.attempted}: ${JSON.stringify(first.failed)}`);
+
+  const reading = await db.metric.findFirst({
+    where: { variationId: TEST_ID },
+    orderBy: { capturedAt: 'desc' },
+  });
+
+  reading?.engagements === 12
+    ? ok('engagement is the sum of favourites, boosts and replies (7+3+2 = 12)')
+    : bad(`expected 12 engagements, got ${reading?.engagements}`);
+
+  // The check this whole phase exists for. Mastodon does not report reach to
+  // anybody, so a 0 here would be the product inventing a number that says
+  // nobody saw the post.
+  reading?.impressions === null
+    ? ok('impressions are null, not zero — Mastodon reports no view count at all')
+    : bad(`impressions came back as ${reading?.impressions}, which claims a reach nobody reported`);
+
+  reading?.source === 'mastodon'
+    ? ok('the reading records which platform said it')
+    : bad(`source is ${reading?.source}`);
+
+  // And the availability answer has to say *why*, not just that it is missing.
+  const avail = measurabilityOf('mastodon', 'impressions', { connected: ['mastodon'] });
+  avail.state === 'unavailable'
+    ? ok(`a permanently missing number is marked unavailable, not "not connected"`)
+    : bad(`state is ${avail.state} — an owner would go looking for a setting that does not exist`);
+  /does not report/.test(avail.reason)
+    ? ok(`and says so in words: ${avail.reason}`)
+    : bad(`reason reads "${avail.reason}"`);
+
+  // Email is the opposite case: measured, with no platform involved.
+  const emailAvail = measurabilityOf('email', 'impressions', { connected: [] });
+  emailAvail.state === 'measured'
+    ? ok('email impressions are measured — we know exactly what was delivered')
+    : bad(`email impressions reported as ${emailAvail.state}, which is the bug this phase fixes`);
+
+  // A channel nobody connected but which does report is a third thing again.
+  const fbAvail = measurabilityOf('facebook', 'impressions', { connected: [] });
+  fbAvail.state === 'not_ingested'
+    ? ok('a channel that reports but has no reader is marked as our gap, not the platform\'s')
+    : bad(`facebook impressions reported as ${fbAvail.state}`);
+
+  // A deleted post stops being asked about.
+  await fetch(`${MOCK}/__delete`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ id: post.externalId }),
+  });
+
+  const second = await refreshPlatformMetrics(ORG_ID);
+  second.missing === 1
+    ? ok('a deleted post is recorded as gone rather than reported as an error')
+    : bad(`expected 1 missing, got ${second.missing} missing / ${second.failed.length} failed`);
+
+  const third = await refreshPlatformMetrics(ORG_ID);
+  third.attempted === 0
+    ? ok('and is not asked about again — a deleted post does not come back')
+    : bad(`re-asked ${third.attempted} times about a post that is gone`);
+
+  // The hardening this section taught us. A post the platform has never
+  // confirmed must not be tombstoned on a single 404 — that is what happened
+  // when the stand-in was an older build without the endpoint, and it silently
+  // stopped every future reading.
+  await db.metric.deleteMany({ where: { variationId: TEST_ID } });
+  const neverSeen = await refreshPlatformMetrics(ORG_ID);
+  neverSeen.missing === 0 && neverSeen.failed.length === 1
+    ? ok('a 404 on a post we have never read is an error, not a deletion')
+    : bad(`expected 1 failure and 0 missing, got ${neverSeen.failed.length} / ${neverSeen.missing}`);
+  (await db.metric.count({ where: { variationId: TEST_ID, postMissing: true } })) === 0
+    ? ok('and writes no tombstone, so a fixed endpoint starts working again')
+    : bad('wrote a permanent "gone" marker on the strength of one 404');
+
+  // The last good reading must not be read as current.
+  const { computePerformance } = await import('../src/lib/analytics');
+  const perf = await computePerformance(ORG_ID);
+  const stale = perf.performance.flatMap((p) => p.byChannel).find((c) => c.channel === 'mastodon');
+  stale === undefined || stale.engagements === null
+    ? ok('a gone post drops out of the report instead of showing its last known figures')
+    : bad(`report still shows ${stale.engagements} engagements for a deleted post`);
+
+  await db.metric.deleteMany({ where: { variationId: TEST_ID } });
 }
 
 /** Leave the demo workspace exactly as found, so the suite re-runs. */

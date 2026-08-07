@@ -1290,3 +1290,103 @@ stub's own provider references.
 **The seed's SMS account existed in a non-connected state**, so the setup's
 `findFirst` for a connected one found nothing and created a duplicate. Changed
 to update-or-create.
+
+---
+
+## Phase 11 — The reporting knows what it knows
+
+The plan said "`/analytics` stops reading seeded rows." The audit before
+building found something better and worse at once: it never read seeded rows —
+`Metric` had zero writes anywhere, including the seed — and the computed
+numbers it does show were wrapped in a blanket claim that was wrong in both
+directions.
+
+Since Phase 2 the report has carried two global arrays: `MEASURED = [clicks,
+leads, conversions, revenue]`, `UNMEASURED = [impressions, engagements,
+spend]`. Applied to every channel alike, that **under-claimed** — it said "Needs
+a platform metrics connection" about email, where Phases 7, 8 and 10 left us
+holding the exact delivered count, the exact open count, and the cost to the
+cent — and it **flattened**: one "not measured" label covering four situations
+an owner would act on differently.
+
+### 11.1 — Four blanks (`src/lib/measurability.ts`)
+
+- **`measured`** — we hold rows for it.
+- **`not_connected`** — the platform reports it; nothing is connected.
+  *Actionable by the owner.*
+- **`not_ingested`** — the platform reports it; we have not built the reader.
+  *Actionable by us, and saying so keeps the pressure where it belongs.*
+- **`unavailable`** — the platform does not publish this number to anybody.
+  *Actionable by nobody, ever.*
+
+The last one is the reason the file exists. Bluesky's `getPosts` returns
+likes, reposts and replies and **no view count of any kind** — reach is absent
+from the AT Protocol. Mastodon's status object is the same, as a stated design
+position of the software. An owner comparing channels on impressions has to
+know that blank is permanent, because the alternative readings are both worse:
+they wait for a number that is never coming, or they read the blank as zero
+and conclude nobody saw the post.
+
+The screen renders the four differently — "nothing sent" / "connect to see" /
+"not measured" / *"not reported"* — with the sentence on hover. `unavailable`
+is checked before `not_connected`, so the product never suggests connecting an
+account that cannot supply the number: that is an afternoon of an owner's time
+spent proving our label wrong.
+
+### 11.2 — Store what you can only observe once (`src/lib/metrics.ts`)
+
+Two readers with opposite retention rules, and the rule is the design:
+
+**Platform numbers are snapshotted.** Bluesky says a post has 14 likes *now*;
+ask tomorrow and it says 19, and nothing anywhere remembers Tuesday. Each
+reading becomes a `Metric` row — nullable counts, a `source` column so two
+readers can disagree attributably, `postMissing` so a deleted post stops being
+asked about.
+
+**Our numbers are computed at read time, never cached.** Email delivered,
+opened, cost — exactly derivable from `EmailDelivery` and `SpendEntry` for any
+window. A snapshot of those would only add a way for the report to disagree
+with the rows.
+
+`Metric`'s counts were `Int @default(0)`; they are now nullable, because a
+Bluesky reading will carry a null impression count for ever and a 0 there
+tells an owner nobody saw their post.
+
+### 11.3 — Two click counts, both shown
+
+The provider's click count and our tracked-link count will not match. Mail
+scanners on business addresses open every link before delivering, so the
+provider runs high; our links are closer to humans but blind to any link we
+did not mint. Averaging produces nobody's measurement; picking the bigger one
+flatters the report. `/analytics` shows both with the gap named, once the
+volume is enough for the ratio to mean something.
+
+### What the tests caught
+
+**"0 delivered, 117 clicks."** The first version counted deliveries with a
+plain `.length` — so a campaign that earned email clicks through a channel it
+never sent on reported `impressions: 0` beside a five-figure click count: two
+statements that cannot both be true. Zero rows is not a measurement of
+nothing; it renders as "nothing sent" now.
+
+**A 404 wrote a permanent tombstone.** The metrics reader treated any 404 as
+"post deleted" and stopped asking for ever. The first live run proved why that
+is wrong: the stand-in server was an older build without the endpoint, every
+post was marked gone on the first pass, and the failure surfaced as zero
+readings rather than as an error. A 404 is conclusive only for a post we have
+read successfully before; otherwise it is an error, and no tombstone is
+written — so a fixed endpoint starts working again on its own.
+
+**The dev overlay was part of the test.** Next's compile indicator sits in the
+corner of the screen — exactly over the nav's collapse button — and intercepts
+clicks while a route compiles, so a browser test failed on a button it could
+see and could not press, depending on nothing but how recently the server had
+restarted. Same shape twice more: a fixed 2.5-second wait for the upload toast
+that passed alone and failed when the media suite had just warmed the server,
+and a `$eval` with a two-selector union that grabbed whichever matched first.
+All three replaced with waits on the observable outcome.
+
+**The UI suite accreted one test PNG per run** into the seeded workspace, with
+the missing-alt-text warning creeping up to match. There is no delete surface
+in the product yet — a real gap, deliberately not built mid-phase — so the
+suite cleans up its own row directly.

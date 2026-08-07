@@ -161,4 +161,41 @@ export const mastodonPublisher: Publisher = {
     if (!res.ok) return { ok: false, error: res.error };
     return { ok: true, account: `@${res.data.username}@${ctx.host}` };
   },
+
+  /**
+   * A status carries its own counters: `favourites_count`, `reblogs_count`
+   * and `replies_count`. There is **no view count** — Mastodon does not
+   * measure reach at all, by design, and no instance can be configured to
+   * report it. So impressions are null for ever here, the same as Bluesky,
+   * and for a stronger reason: it is a stated position of the software rather
+   * than an omission.
+   *
+   * Worth an owner knowing before they compare it to Facebook on reach.
+   */
+  async fetchMetrics(postId: string) {
+    const ctx = mastodonContext();
+    const token = getAccessToken('mastodon');
+    if (!ctx || !token) return { ok: false, error: 'Mastodon is not connected.' };
+
+    const res = await api<{
+      favourites_count?: number;
+      reblogs_count?: number;
+      replies_count?: number;
+    }>(ctx.host, `/api/v1/statuses/${encodeURIComponent(postId)}`, { token });
+
+    if (!res.ok) {
+      // A deleted status is a 404, which is an answer and not an error: the
+      // post is gone and will not come back, so the refresher should stop
+      // asking rather than retrying for ever.
+      if (res.status === 404) {
+        return { ok: true, metrics: { impressions: null, engagements: null, clicks: null, missing: true } };
+      }
+      return { ok: false, error: `${ctx.host} returned ${res.status}: ${res.error}` };
+    }
+
+    const engagements =
+      (res.data.favourites_count ?? 0) + (res.data.reblogs_count ?? 0) + (res.data.replies_count ?? 0);
+
+    return { ok: true, metrics: { impressions: null, engagements, clicks: null } };
+  },
 };

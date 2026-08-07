@@ -1415,6 +1415,94 @@ async function main() {
     }
   }
 
+  console.log('\n== The reporting knows what it knows ==');
+  {
+    // The correction at the centre of Phase 11. For two phases `/analytics`
+    // reported impressions, engagement and spend as unmeasured on *every*
+    // channel — including email, where we hold the exact delivered count, the
+    // exact open count, and the cost to the cent. The screen said "Needs a
+    // platform metrics connection" about the channel we measure best.
+    const user = await db.user.findFirst({ where: { passwordHash: { not: null } } });
+    if (!user) { bad('no seeded user'); return; }
+    const login = await fetch(`${BASE}/api/auth/login`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: user.email, password: process.env.SEED_PASSWORD || 'demo-password-change-me' }),
+    });
+    const cookie = login.headers.get('set-cookie')?.split(';')[0] ?? '';
+    const orgId = (await db.membership.findFirst({ where: { userId: user.id } }))?.organizationId ?? '';
+
+    const variation = await db.channelVariation.findFirst({
+      where: { channel: 'EMAIL', contentItem: { campaign: { organizationId: orgId } } },
+      select: { id: true, contentItem: { select: { campaignId: true } } },
+    });
+    const contact = await db.contact.findFirst({ where: { organizationId: orgId, email: { not: null } } });
+
+    if (!variation || !contact) {
+      bad('no email variation or contact to measure — the fixture changed');
+    } else {
+      const tag = `metrics-${Date.now()}`;
+      // Three delivered, one of them opened. Chosen numbers, so the assertion
+      // is about the count and not about whatever the fixture happened to hold.
+      await db.emailDelivery.createMany({
+        data: [
+          { variationId: variation.id, contactId: contact.id, status: 'DELIVERED', costCents: 0, providerRef: `${tag}-1` },
+          { variationId: variation.id, contactId: contact.id, status: 'OPENED', costCents: 0, providerRef: `${tag}-2`, openedAt: new Date() },
+          { variationId: variation.id, contactId: contact.id, status: 'CLICKED', costCents: 0, providerRef: `${tag}-3`, openedAt: new Date(), clickedAt: new Date() },
+          { variationId: variation.id, contactId: contact.id, status: 'QUEUED', costCents: 0, providerRef: `${tag}-4` },
+        ],
+      });
+      await db.spendEntry.create({
+        data: {
+          organizationId: orgId, channel: 'EMAIL', kind: 'message', cents: 300, units: 3,
+          campaignId: variation.contentItem.campaignId, providerRef: `${tag}-spend`,
+        },
+      });
+
+      const res = await fetch(`${BASE}/api/analytics`, { headers: { cookie } });
+      const body = await res.json();
+      const rows = (body.performance ?? []).flatMap((p: { byChannel: { channel: string; impressions: number | null; engagements: number | null; spend: number | null }[] }) => p.byChannel);
+      const email = rows.find((r: { channel: string }) => r.channel === 'email');
+
+      email ? ok('email appears in the report at all') : bad('email is absent from the report despite having deliveries');
+
+      email?.impressions === 3
+        ? ok('email impressions are the delivered count (3), not "not measured"')
+        : bad(`email impressions came back as ${JSON.stringify(email?.impressions)} — the queued one should not count and the number should not be null`);
+
+      email?.engagements === 2
+        ? ok('email engagement is the open count (2)')
+        : bad(`email engagement came back as ${JSON.stringify(email?.engagements)}`);
+
+      email?.spend === 3
+        ? ok('email spend comes from the ledger ($3.00)')
+        : bad(`email spend came back as ${JSON.stringify(email?.spend)}`);
+
+      const avail = body.meta?.availability?.email;
+      avail?.impressions?.state === 'measured'
+        ? ok('and the report says so: email impressions are marked measured')
+        : bad(`email impressions marked ${avail?.impressions?.state}`);
+
+      // The other half: a blank that is nobody's fault must say so.
+      const { measurabilityOf } = await import('../src/lib/measurability');
+      const permanent = measurabilityOf('bluesky', 'impressions', { connected: ['bluesky'] });
+      permanent.state === 'unavailable' && /does not report/.test(permanent.reason)
+        ? ok(`a permanent blank explains itself: "${permanent.reason}"`)
+        : bad(`bluesky impressions: ${permanent.state} / ${permanent.reason}`);
+
+      // Two click counts, shown as two numbers rather than reconciled into one.
+      const rec = body.meta?.clickReconciliation;
+      rec && typeof rec.provider === 'number' && typeof rec.tracked === 'number'
+        ? ok(`both click counts are reported side by side (provider ${rec.provider}, ours ${rec.tracked})`)
+        : bad(`click reconciliation missing or malformed: ${JSON.stringify(rec)}`);
+      rec && rec.gap === rec.provider - rec.tracked
+        ? ok('the gap is stated rather than averaged away')
+        : bad('the gap does not match the two counts');
+
+      await db.emailDelivery.deleteMany({ where: { providerRef: { startsWith: tag } } });
+      await db.spendEntry.deleteMany({ where: { providerRef: `${tag}-spend` } });
+    }
+  }
+
   console.log('\n== Login does not leak which accounts exist ==');
   {
     const t0 = Date.now();

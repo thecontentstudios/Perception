@@ -5,6 +5,7 @@ import { forecastMonth } from '@/lib/projection';
 import { spendSplit } from '@/lib/billing';
 import { sendingStatus } from '@/lib/senders/registry';
 import type { Channel } from '@/lib/types';
+import { budgetScope, monthKey } from '@/lib/ledger';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,23 +18,6 @@ export const dynamic = 'force-dynamic';
  * were shown at the time. The ledger is what was charged; that is the number
  * a business needs.
  */
-
-/** 'YYYY-MM' for a date, in UTC — the same month boundary the ledger uses. */
-export function monthKey(d: Date): string {
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
-}
-
-/**
- * The canonical uniqueness key for a budget.
- *
- * One function, used by both the writer and the reader, because two places
- * deriving "the same" key independently is how a cap gets written under one
- * name and looked up under another — and a cap nobody reads is worse than no
- * cap, since the owner believes it is there.
- */
-export function budgetScope(brandId: string | null, channel: string | null): string {
-  return `${brandId ?? 'all'}:${channel ? channel.toUpperCase() : 'all'}`;
-}
 
 function monthBounds(key: string): { start: Date; end: Date } {
   const [y, m] = key.split('-').map(Number);

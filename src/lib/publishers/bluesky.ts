@@ -1,4 +1,5 @@
 import { getAccessToken, getRefreshToken, saveGrant } from '../oauth/store';
+import type { PostMetrics } from './types';
 
 /**
  * Real Bluesky publishing over AT Protocol.
@@ -204,6 +205,61 @@ export async function publishToBluesky(
       cid: created.cid,
       url: `https://bsky.app/profile/${opts.handle}/post/${rkey}`,
     };
+  } catch (e) {
+    return { ok: false, error: `Could not reach ${PDS}: ${(e as Error).message}` };
+  }
+}
+
+/**
+ * The platform's own numbers for a post.
+ *
+ * `app.bsky.feed.getPosts` returns `likeCount`, `repostCount`, `replyCount`
+ * and `quoteCount` — and **no view count of any kind.** Not a restricted one,
+ * not one behind a tier: reach is absent from the AT Protocol response
+ * because the protocol does not model it. So `impressions` is null here for
+ * ever, and that null is a fact about Bluesky rather than a gap in this code.
+ *
+ * Engagement is the sum of the four, because an owner asking "did this land"
+ * means all of it. The breakdown stays available in the response for a screen
+ * that wants it; what goes into `Metric` is the answer to the question.
+ */
+export async function fetchBlueskyMetrics(
+  uri: string
+): Promise<{ ok: boolean; metrics?: PostMetrics; error?: string }> {
+  const token = getAccessToken('bluesky');
+  if (!token) return { ok: false, error: 'Bluesky is not connected.' };
+
+  const call = async (t: string): Promise<Response> =>
+    fetch(`${PDS}/xrpc/app.bsky.feed.getPosts?uris=${encodeURIComponent(uri)}`, {
+      headers: { Authorization: `Bearer ${t}` },
+    });
+
+  try {
+    let res = await call(token);
+    if (res.status === 400 || res.status === 401) {
+      const body = await res.clone().text();
+      if (/ExpiredToken|invalid.?token/i.test(body)) {
+        const fresh = await refreshSession();
+        if (!fresh) return { ok: false, error: 'The Bluesky session expired.' };
+        res = await call(fresh);
+      }
+    }
+    if (!res.ok) return { ok: false, error: `Bluesky returned ${res.status}.` };
+
+    const body = (await res.json()) as {
+      posts?: { likeCount?: number; repostCount?: number; replyCount?: number; quoteCount?: number }[];
+    };
+    const post = body.posts?.[0];
+
+    // An empty array is a deleted post, not a failure. Recording it as such
+    // stops the refresher retrying a post that will never come back, and
+    // stops the last known figures being read as current.
+    if (!post) return { ok: true, metrics: { impressions: null, engagements: null, clicks: null, missing: true } };
+
+    const engagements =
+      (post.likeCount ?? 0) + (post.repostCount ?? 0) + (post.replyCount ?? 0) + (post.quoteCount ?? 0);
+
+    return { ok: true, metrics: { impressions: null, engagements, clicks: null } };
   } catch (e) {
     return { ok: false, error: `Could not reach ${PDS}: ${(e as Error).message}` };
   }

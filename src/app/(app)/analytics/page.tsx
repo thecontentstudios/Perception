@@ -132,10 +132,50 @@ function addMaybe(a: number | null, b: number | null): number | null {
   return a + b;
 }
 
-/** Render a metric, or say plainly that we do not have it. */
-function measured(n: number | null, fmt: (n: number) => string) {
-  if (n === null) return <span style={{ color: 'var(--muted)' }} title="Needs a platform metrics connection">not measured</span>;
-  return fmt(n);
+/**
+ * Render a metric, or say plainly why we do not have it.
+ *
+ * The four blanks are not interchangeable and this is where that stops being
+ * an abstraction. "Connect it" is an instruction. "Not reported" is a fact
+ * about the platform that will never change, and rendering it identically to
+ * a missing connection leaves an owner waiting for a number that is never
+ * coming — or reading the blank as zero and concluding nobody saw the post.
+ */
+function measured(
+  n: number | null,
+  fmt: (n: number) => string,
+  availability?: { state: string; reason: string }
+) {
+  if (n !== null) return fmt(n);
+
+  const state = availability?.state ?? 'not_ingested';
+  const text =
+    state === 'unavailable'
+      ? 'not reported'
+      : state === 'not_connected'
+        ? 'connect to see'
+        : // Measurable, and no rows to measure. "Not measured" would be wrong
+          // twice over: we would measure it, and there is nothing here to
+          // measure. This is the blank a campaign gets when it earned clicks
+          // through a channel it never sent on.
+          state === 'measured'
+          ? 'nothing sent'
+          : 'not measured';
+
+  return (
+    <span
+      style={{
+        color: 'var(--muted)',
+        // A permanent blank is set lighter still: it is the one an owner
+        // should stop looking at.
+        opacity: state === 'unavailable' ? 0.7 : 1,
+        fontStyle: state === 'unavailable' ? 'italic' : undefined,
+      }}
+      title={availability?.reason ?? 'Needs a platform metrics connection'}
+    >
+      {text}
+    </span>
+  );
 }
 
 export default function AnalyticsPage() {
@@ -149,7 +189,13 @@ export default function AnalyticsPage() {
    * illustrative numbers is exactly the mistake this screen exists to prevent.
    */
   const [computed, setComputed] = useState<CampaignPerformance[] | null>(null);
-  const [meta, setMeta] = useState<{ attributedConversions: number; totalConversions: number } | null>(null);
+  const [meta, setMeta] = useState<{
+    attributedConversions: number;
+    totalConversions: number;
+    availability?: Record<string, Record<string, { state: string; reason: string }>>;
+    summary?: string;
+    clickReconciliation?: { provider: number; tracked: number; gap: number; notable: boolean; explanation: string };
+  } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -241,11 +287,37 @@ export default function AnalyticsPage() {
         <span style={{ fontSize: 12, color: 'var(--ink-2)' }}>
           {computed
             ? meta && meta.totalConversions > 0
-              ? `${meta.attributedConversions} of ${meta.totalConversions} results traced to a specific post. Clicks, leads and revenue are measured; impressions, engagement and ad spend need a platform connection.`
+              ? `${meta.attributedConversions} of ${meta.totalConversions} results traced to a specific post. ${meta.summary ?? ''}`
               : 'Clicks, leads and revenue are measured from tracked links and form events. Impressions, engagement and ad spend need a platform connection.'
             : 'Connect a database and publish a tracked post to see your own numbers here.'}
         </span>
       </div>
+
+      {/* Two click counts that disagree, shown as two numbers.
+          Picking one would hide the most useful thing in the comparison, and
+          averaging them produces a figure that is nobody's measurement. */}
+      {meta?.clickReconciliation && meta.clickReconciliation.notable && (
+        <div className="card card-pad" style={{ marginBottom: 12 }}>
+          <div style={{ fontWeight: 650, marginBottom: 6 }}>Two click counts, and they disagree</div>
+          <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', marginBottom: 8 }}>
+            <div>
+              <div className="num" style={{ fontSize: 22, fontWeight: 650 }}>
+                {meta.clickReconciliation.provider.toLocaleString('en-US')}
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--ink-2)' }}>your email provider counted</div>
+            </div>
+            <div>
+              <div className="num" style={{ fontSize: 22, fontWeight: 650 }}>
+                {meta.clickReconciliation.tracked.toLocaleString('en-US')}
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--ink-2)' }}>our tracked links counted</div>
+            </div>
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--ink-2)', maxWidth: '62ch' }}>
+            {meta.clickReconciliation.explanation}
+          </div>
+        </div>
+      )}
 
       {/* One filter row scoping everything below it */}
       <div className="cal-toolbar">
@@ -395,7 +467,9 @@ export default function AnalyticsPage() {
                       <ChannelIcon channel={ch.channel} size={15} /> {CHANNEL_META[ch.channel].label}
                     </span>
                   </td>
-                  <td className="num">{measured(ch.impressions, (n) => n.toLocaleString('en-US'))}</td>
+                  <td className="num">
+                    {measured(ch.impressions, (n) => n.toLocaleString('en-US'), meta?.availability?.[ch.channel]?.impressions)}
+                  </td>
                   <td className="num">{ch.clicks.toLocaleString('en-US')}</td>
                   <td className="num" style={{ fontWeight: 650 }}>
                     {ch.leads}
@@ -403,7 +477,7 @@ export default function AnalyticsPage() {
                   <td className="num">{ch.conversions}</td>
                   <td className="num">{ch.clicks > 0 ? `${Math.round((ch.leads / ch.clicks) * 100)}%` : '—'}</td>
                   <td className="num">{ch.revenue > 0 ? fmtMoney(ch.revenue) : '—'}</td>
-                  <td className="num">{measured(ch.spend, fmtMoney)}</td>
+                  <td className="num">{measured(ch.spend, fmtMoney, meta?.availability?.[ch.channel]?.spend)}</td>
                 </tr>
               ))}
             </tbody>

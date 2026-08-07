@@ -38,6 +38,25 @@ export interface PublisherCapabilities {
   limitIsPerInstance: boolean;
 }
 
+/**
+ * What a platform will tell us about a post after it is up.
+ *
+ * Every field is nullable, and the nulls are the informative part. Neither
+ * platform we can publish to reports impressions — not behind a paid tier,
+ * not to the post's own author: the number is absent from the response. A
+ * `0` here would tell an owner nobody saw their post, so the shape refuses to
+ * let an implementation say that by accident.
+ */
+export interface PostMetrics {
+  impressions: number | null;
+  /** Likes, boosts, replies — whatever the platform counts as interaction. */
+  engagements: number | null;
+  /** Clicks the *platform* counted, which is never our tracked-link count. */
+  clicks: number | null;
+  /** Present when the post is gone: deleted by the owner, or by the instance. */
+  missing?: boolean;
+}
+
 export interface Publisher {
   capabilities: PublisherCapabilities;
   /** Count text the way this platform counts it. */
@@ -48,4 +67,12 @@ export interface Publisher {
   publish(text: string, opts: { idempotencyKey?: string }): Promise<PublishOutcome>;
   /** Confirm the stored credential still works, and say who it belongs to. */
   verify(): Promise<{ ok: boolean; account?: string; error?: string }>;
+  /**
+   * Read the platform's own numbers for a post we published.
+   *
+   * Takes the id `publish` returned. Absent on publishers whose platform has
+   * no metrics endpoint at all — an optional method is honest where a method
+   * that always returns nulls would look like a bug.
+   */
+  fetchMetrics?(postId: string): Promise<{ ok: boolean; metrics?: PostMetrics; error?: string }>;
 }

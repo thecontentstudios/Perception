@@ -1,6 +1,6 @@
 import type { Channel } from '../types';
 import type { Publisher } from './types';
-import { graphemeLength, publishToBluesky } from './bluesky';
+import { fetchBlueskyMetrics, graphemeLength, publishToBluesky } from './bluesky';
 import { mastodonContext, mastodonPublisher } from './mastodon';
 import { summaries } from '../oauth/store';
 
@@ -65,6 +65,8 @@ export const blueskyPublisher: Publisher = {
       ? { ok: true, account: ctx.label }
       : { ok: false, error: 'Bluesky is not connected.' };
   },
+
+  fetchMetrics: (postId: string) => fetchBlueskyMetrics(postId),
 };
 
 const REGISTRY: Partial<Record<Channel, Publisher>> = {

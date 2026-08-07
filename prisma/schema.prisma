@@ -581,16 +581,33 @@ model Conversation {
 // Analytics
 // ---------------------------------------------------------------------------
 
+/// One reading of a post's numbers, from whoever was able to supply them.
+///
+/// Every count is nullable, and that is the whole design. These columns used
+/// to be `Int @default(0)`, which cannot distinguish "the platform said zero"
+/// from "the platform does not publish this" — and the two are opposite
+/// claims. Bluesky and Mastodon report likes, boosts and replies and **no view
+/// count at all**, so a row written from either will always carry a null
+/// `impressions`. Storing 0 would tell an owner nobody saw their post.
 model Metric {
   id          String           @id @default(cuid())
   variationId String
-  variation   ChannelVariation @relation(fields: [variationId], references: [id])
+  variation   ChannelVariation @relation(fields: [variationId], references: [id], onDelete: Cascade)
   capturedAt  DateTime         @default(now())
-  impressions Int              @default(0)
-  clicks      Int              @default(0)
-  engagements Int              @default(0)
+  impressions Int?
+  clicks      Int?
+  engagements Int?
+  /// Which reader produced this: a channel name for a platform API, or
+  /// `delivery` for numbers computed from our own send rows. Kept so a
+  /// disagreement between two sources stays attributable instead of being
+  /// resolved by whichever wrote last.
+  source      String           @default("platform")
+  /// The post is gone from the platform. Stops the refresher retrying for
+  /// ever and stops the last known figures being read as current.
+  postMissing Boolean          @default(false)
 
   @@index([variationId, capturedAt])
+  @@unique([variationId, source, capturedAt])
 }
 
 // ---------------------------------------------------------------------------

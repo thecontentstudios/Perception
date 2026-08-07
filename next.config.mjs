@@ -42,6 +42,42 @@ const nextConfig = {
   // Framework fingerprinting, for free, to anyone scanning.
   poweredByHeader: false,
 
+  /**
+   * BullMQ ships support for a second Redis client it does not depend on.
+   *
+   * `@valkey/valkey-glide` is an optional alternative to ioredis, imported
+   * unconditionally by BullMQ's ESM build and resolved at runtime only if
+   * present. Webpack cannot know that, so it reports a module it cannot find
+   * on every compile — which raises the dev error overlay, and an overlay
+   * sitting over the page swallows clicks. A browser test then fails on a
+   * button it can see and cannot press, with nothing wrong with the button.
+   *
+   * Marked external rather than installed: we use ioredis, and pulling in a
+   * second Redis client to silence a warning would be the wrong trade.
+   */
+  serverExternalPackages: ['@valkey/valkey-glide'],
+
+  /**
+   * Next's development activity indicator sits in the bottom-left corner —
+   * directly over the nav's own collapse button. While a route is compiling it
+   * intercepts pointer events, so a browser test clicking that button waits 30
+   * seconds for an element it can see and cannot press.
+   *
+   * This is the compile *indicator*, not the error overlay: a real runtime
+   * error still interrupts loudly. Turning it off removes a source of test
+   * flakiness that depends on nothing but how recently the server restarted.
+   */
+  devIndicators: false,
+
+  webpack(config) {
+    // `serverExternalPackages` alone is not enough: the import sits inside a
+    // dependency's ESM build, which webpack still tries to resolve while
+    // bundling it. Aliasing it to `false` tells webpack the module is
+    // deliberately absent, which is the truth.
+    config.resolve.alias = { ...config.resolve.alias, '@valkey/valkey-glide': false };
+    return config;
+  },
+
   async headers() {
     return [
       { source: '/:path*', headers: baseHeaders },

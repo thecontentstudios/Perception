@@ -937,7 +937,66 @@ async function readPathChecks() {
   }
 }
 
+/**
+ * Phase 11 — the four reasons a number can be missing.
+ *
+ * A single "unmeasured" flag collapses all four, and the one it hides most
+ * damagingly is the permanent one: an owner who reads "not measured" against
+ * Bluesky impressions goes looking for a setting that does not exist.
+ */
+async function measurabilityChecks() {
+  console.log('\n== Why a number is missing ==');
+  const { measurabilityOf, summarise } = await import('../src/lib/measurability');
+
+  const none = { connected: [] as never[] };
+
+  // Measured, no platform involved. This is the case the old global arrays
+  // got wrong, and it is the reason this phase exists.
+  measurabilityOf('email', 'impressions', none).state === 'measured'
+    ? ok('email impressions: measured — a delivered message is in a mailbox')
+    : bad('email impressions are still reported as unmeasured');
+  measurabilityOf('email', 'spend', none).state === 'measured'
+    ? ok('email spend: measured — we charged for it ourselves')
+    : bad('email spend reported as unmeasured despite the ledger');
+
+  // A text has no open event, so engagement on SMS is not a gap we can close.
+  measurabilityOf('sms', 'engagements', none).state === 'unavailable'
+    ? ok('SMS engagement: unavailable — a text has no open event')
+    : bad('SMS engagement is claimed as obtainable');
+
+  // The distinction the whole file exists for.
+  const bsky = measurabilityOf('bluesky', 'impressions', { connected: ['bluesky'] });
+  bsky.state === 'unavailable'
+    ? ok('Bluesky impressions: unavailable even when connected — the API has no view count')
+    : bad(`Bluesky impressions reported as ${bsky.state}, which implies connecting would help`);
+
+  const fbConnected = measurabilityOf('facebook', 'impressions', { connected: ['facebook'] });
+  fbConnected.state === 'not_ingested'
+    ? ok('Facebook impressions: our gap, and stays our gap once connected')
+    : bad(`Facebook impressions reported as ${fbConnected.state}`);
+
+  // Clicks are ours on every channel — that is what minting a link per
+  // variation buys.
+  ['bluesky', 'facebook', 'nextdoor'].every(
+    (c) => measurabilityOf(c as never, 'clicks', none).state === 'measured'
+  )
+    ? ok('clicks are measured on every channel, from our own tracked links')
+    : bad('a channel reported clicks as unmeasurable');
+
+  // The summary sentence must be built from the channels in the report.
+  const emailOnly = summarise(['email'], none);
+  !/platform connection/i.test(emailOnly) && /measured/i.test(emailOnly)
+    ? ok(`an email-only report does not blame a missing platform: "${emailOnly.slice(0, 60)}..."`)
+    : bad(`email-only summary reads "${emailOnly}"`);
+
+  const withBluesky = summarise(['bluesky'], { connected: ['bluesky'] });
+  /never reported/.test(withBluesky)
+    ? ok('a Bluesky report says the missing numbers are never coming')
+    : bad(`bluesky summary reads "${withBluesky}"`);
+}
+
 webhookSignatureChecks()
+  .then(measurabilityChecks)
   .then(readPathChecks)
   .then(() => {
   console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL UNIT CHECKS PASSED');

@@ -837,19 +837,45 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
       const a = await page.evaluate(() => fetch('/api/analytics').then((r) => r.json()));
       a.source === 'computed' ? ok('analytics computed, not fixtured') : bad(`source is ${a.source}: ${a.reason}`);
 
-      a.meta.unmeasured.includes('impressions') && a.meta.unmeasured.includes('spend')
-        ? ok(`impressions and spend declared unmeasured (${a.meta.unmeasured.join(', ')})`)
-        : bad(`unmeasured list wrong: ${a.meta.unmeasured}`);
-      a.meta.measured.includes('leads') && a.meta.measured.includes('revenue')
-        ? ok(`leads and revenue declared measured (${a.meta.measured.join(', ')})`)
-        : bad(`measured list wrong: ${a.meta.measured}`);
+      // Phase 11 replaced two global lists of metric names with an answer per
+      // channel per metric. The global version said "impressions are
+      // unmeasured" about email, where we know the delivered count exactly.
+      const av = a.meta.availability ?? {};
+      Object.keys(av).length > 0
+        ? ok(`availability answered for ${Object.keys(av).length} channels in the report`)
+        : bad('no availability map — the report cannot say why a number is missing');
+
+      // Every state must be one of the four, and every one must carry a reason
+      // an owner can read. A state with no sentence is a blank with extra steps.
+      const STATES = ['measured', 'not_connected', 'not_ingested', 'unavailable'];
+      const cells = Object.entries(av).flatMap(([ch, ms]) =>
+        Object.entries(ms).map(([m, v]) => ({ ch, m, ...v }))
+      );
+      cells.every((c) => STATES.includes(c.state))
+        ? ok(`${cells.length} availability answers, all four-state`)
+        : bad(`unknown state: ${cells.find((c) => !STATES.includes(c.state))?.state}`);
+      cells.every((c) => typeof c.reason === 'string' && c.reason.length > 10)
+        ? ok('every missing number carries a sentence explaining itself')
+        : bad(`a state has no reason: ${JSON.stringify(cells.find((c) => !c.reason))}`);
+
+      // Clicks, leads and revenue are ours on every channel — that is what
+      // minting a tracked link per variation buys.
+      cells.filter((c) => ['clicks', 'leads', 'revenue'].includes(c.m)).every((c) => c.state === 'measured')
+        ? ok('clicks, leads and revenue are measured on every channel in the report')
+        : bad('a channel claims it cannot measure its own clicks or leads');
 
       // Unmeasured must be null, never 0 — "0 impressions" reads as "nobody
-      // saw it", which is a claim we cannot make.
+      // saw it", which is a claim we cannot make. Now checked against the
+      // availability answer rather than assuming every column is blank:
+      // email is genuinely measured, so a number there is correct.
       const rows = a.performance.flatMap((p) => p.byChannel);
-      rows.every((r) => r.impressions === null && r.engagements === null && r.spend === null)
-        ? ok(`${rows.length} channel rows report unmeasured as null, not zero`)
-        : bad('a channel row reported an unmeasured metric as a number');
+      const lying = rows.filter((r) => {
+        const state = av[r.channel]?.impressions?.state;
+        return state === 'unavailable' && r.impressions !== null;
+      });
+      lying.length === 0
+        ? ok(`${rows.length} channel rows: nothing the platform refuses to report is given a number`)
+        : bad(`${lying[0].channel} reported ${lying[0].impressions} impressions on a platform that publishes none`);
 
       // Every computed number has to reconcile with the rows behind it.
       const links = await page.evaluate((c) =>
@@ -884,8 +910,26 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
       banner.includes('Computed')
         ? ok(`the page says where its numbers came from ("${banner}")`)
         : bad(`banner says "${banner}"`);
-      const notMeasured = await page.evaluate(() => document.body.innerText.includes('not measured') || document.body.innerText.includes('Not measured'));
-      notMeasured ? ok('unmeasured metrics read "not measured" on screen') : bad('no "not measured" anywhere — a zero is being shown instead');
+      // The four blanks must read differently on screen, or the distinction
+      // the whole phase exists for dies at the last step. An owner who sees
+      // one label for "connect it" and "nobody can ever have it" goes looking
+      // for a setting that does not exist.
+      await page.click('text=Channel detail').catch(() => {});
+      await page.waitForTimeout(400);
+      const blanks = await page.evaluate(() =>
+        [...document.querySelectorAll('td span[title]')]
+          .filter((e) => /not reported|connect to see|not measured|nothing sent/.test(e.textContent))
+          .map((e) => ({ text: e.textContent.trim(), title: e.getAttribute('title') }))
+      );
+      blanks.length > 0
+        ? ok(`${blanks.length} blank cells on screen, each with a reason on hover`)
+        : bad('no blank cells found — a zero is being shown instead');
+      new Set(blanks.map((b) => b.text)).size >= 2
+        ? ok(`and they do not all read alike (${[...new Set(blanks.map((b) => b.text))].join(' / ')})`)
+        : bad(`every blank reads "${blanks[0]?.text}" — the four cases are collapsed on screen`);
+      blanks.every((b) => b.title && b.title.length > 10)
+        ? ok('every blank explains itself on hover')
+        : bad(`a blank has no explanation: ${JSON.stringify(blanks.find((b) => !b.title))}`);
     }
   }
 
@@ -969,9 +1013,14 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
         bad('no file input on the media page');
       } else {
         await input.setInputFiles({ name: 'fall-cleanup-crew.png', mimeType: 'image/png', buffer: png });
-        await page.waitForTimeout(2500);
+        // Wait for the toast itself, not a fixed interval. A fixed 2.5s
+        // passed when this suite ran alone and failed inside `npm test`,
+        // where the server is still busy from the media suite and the upload
+        // takes longer — the count check further down, with its own extra
+        // waits, then saw the asset land, proving the upload was merely slow.
+        await page.waitForSelector('[role="status"]', { timeout: 15000 }).catch(() => {});
 
-        const note = await page.$eval('[role="status"], .warning-row', (e) => e.innerText).catch(() => '');
+        const note = await page.$eval('[role="status"]', (e) => e.innerText).catch(() => '');
         /Uploaded/i.test(note) ? ok(`upload confirmed on screen ("${note.slice(0, 45)}…")`) : bad(`no upload confirmation: "${note.slice(0, 60)}"`);
         /[Ll]ocation data/.test(note)
           ? ok('the page says location data was removed')
@@ -994,6 +1043,19 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
         evil.status === 404 ? ok('a traversal attempt 404s') : bad(`traversal returned ${evil.status}`);
         const wrongShape = await fetch('http://localhost:3000/api/media/file/aa/bb/notahash.jpg');
         wrongShape.status === 404 ? ok('a malformed key 404s') : bad(`malformed key returned ${wrongShape.status}`);
+
+        // The suite leaves nothing behind. There is no delete surface in the
+        // product yet, so this reaches into the database — the alternative is
+        // a seeded workspace that accretes one identical test PNG per run,
+        // with the missing-alt-text warning creeping up to match.
+        try {
+          const { PrismaClient } = require('@prisma/client');
+          const prisma = new PrismaClient();
+          await prisma.mediaAsset.deleteMany({ where: { fileName: 'fall-cleanup-crew.png' } });
+          await prisma.$disconnect();
+        } catch (e) {
+          bad(`could not clean up the uploaded test asset: ${e.message}`);
+        }
       }
     }
   }

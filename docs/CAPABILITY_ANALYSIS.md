@@ -15,11 +15,11 @@ to the cent. What has not kept pace is the part that touches the outside world.
 
 | Layer | Size | State |
 |---|---|---|
-| Domain model + engines (`src/lib`) | ~13,100 lines | Rich, tested, honest |
+| Domain model + engines (`src/lib`) | ~14,600 lines | Rich, tested, honest |
 | Screens (`src/app/**/page.tsx`) | ~6,200 lines | Complete |
-| Server surface (`src/app/api`) | ~3,650 lines | Real, authenticated, tenant-scoped |
+| Server surface (`src/app/api`) | ~3,700 lines | Real, authenticated, tenant-scoped |
 | Worker + queue | ~420 lines | Real; fires scheduled posts |
-| Tests | ~3,100 lines | 686 checks, five suites |
+| Tests | ~4,800 lines | 719 checks, five suites |
 | **Channels that can actually publish** | **2 of 18** | Bluesky, Mastodon |
 | **Channels that can actually send** | **2 of 2** | Email through Resend, SMS through Twilio |
 | **Ad platforms that can actually buy** | **0 of 11** | Priced, planned, never purchased |
@@ -71,11 +71,16 @@ There are now three ways in — a hosted or embedded signup form, a CSV import
 with a preview, and website conversions — all through one `intake()` function
 that refuses to mark anybody subscribed without a recorded basis.
 
-### 3. Metrics are seeded, never ingested
+### 3. Metrics are seeded, never ingested — **fixed in Phase 11**
 
-`metric.create` appears nowhere outside the seed. `/analytics` is computing
-honestly over numbers that were invented at seed time. Attribution data is
-real; platform-reported impressions and engagement are not.
+The audit line was itself too kind: `metric.create` appeared nowhere *at all*,
+seed included — the table was orphaned. Bluesky and Mastodon engagement is now
+read through the same publishers that post, snapshotted per reading, with the
+platforms' permanent silences (neither reports a view count to anyone) carried
+as facts rather than blanks. Email and SMS report from our own send rows.
+What remains open is the wide middle: Facebook, Instagram and the rest report
+rich metrics and have no reader yet — the report marks them "not measured"
+rather than pretending either way.
 
 ### 4. The inbox is a fixture
 
@@ -240,17 +245,29 @@ than silently adopting the carrier's number.
 The reconciliation earned its place immediately: it caught that SMS was being
 priced with merge fields and an opt-out line filled in, and sent with neither.
 
-### Phase 11 — Real numbers in the reporting
+### Phase 11 — Real numbers in the reporting — **done**
 
-1. Metric ingestion per channel where the API allows it, into `Metric`.
-2. `/analytics` stops reading seeded rows and labels anything it cannot measure —
-   the `MEASURED` / `UNMEASURED` split already exists and is currently decorative.
-3. Reconcile platform-reported clicks against our own tracked-link clicks and
-   **show the discrepancy** rather than picking one.
+1. Metric ingestion into `Metric` — Bluesky and Mastodon readers behind an
+   optional `fetchMetrics` on the Publisher contract, snapshotted per reading
+   because the platforms keep no history. (The audit found `Metric` had zero
+   writes anywhere — not even the seed. "Seeded, never ingested" was generous.)
+2. The global `MEASURED`/`UNMEASURED` arrays replaced with an answer **per
+   channel per metric**, in four states: measured / not connected /
+   not ingested / **unavailable**. The old split said "needs a platform
+   connection" about email — the channel Phases 7–10 made exactly measurable —
+   and could not say that Bluesky and Mastodon publish no view count to
+   anybody, which is a fact an owner needs before comparing channels on reach.
+3. Provider clicks and tracked-link clicks shown side by side with the gap
+   named, once volume makes the ratio meaningful. Mail scanners inflate one;
+   unminted links hide from the other; averaging is nobody's measurement.
 
-**Acceptance:** with a live account connected, an impression count on
-`/analytics` traces to a platform response; with none, the screen says the
-number is unavailable instead of showing a seeded one.
+**Acceptance — met.** A published post's engagement traces to a platform
+response through the real adapter (7 favourites + 3 boosts + 2 replies = 12,
+read off the wire); email impressions are the delivered count and marked
+measured; a number the platform never publishes renders as "not reported" with
+the reason on hover, distinct from "connect to see"; a deleted post is
+recorded as gone once and never asked about again — but a 404 on a post never
+read successfully is an error, not a tombstone.
 
 ### Phase 12 — Widen: publishers, then ads
 
