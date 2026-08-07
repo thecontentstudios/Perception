@@ -1,5 +1,5 @@
 import { getAccessToken, getRefreshToken, saveGrant } from '../oauth/store';
-import type { PostMetrics } from './types';
+import type { MediaAttachment, PostMetrics } from './types';
 
 /**
  * Real Bluesky publishing over AT Protocol.
@@ -17,7 +17,7 @@ import type { PostMetrics } from './types';
  *     rejects valid posts or lets over-long ones through to a server error.
  */
 
-const PDS = process.env.BLUESKY_PDS_URL || 'https://bsky.social';
+const PDS = () => process.env.BLUESKY_PDS_URL || 'https://bsky.social';
 const MAX_GRAPHEMES = 300;
 
 export interface PublishResult {
@@ -102,7 +102,7 @@ async function refreshSession(): Promise<string | null> {
   const refresh = getRefreshToken('bluesky');
   if (!refresh) return null;
   try {
-    const res = await fetch(`${PDS}/xrpc/com.atproto.server.refreshSession`, {
+    const res = await fetch(`${PDS()}/xrpc/com.atproto.server.refreshSession`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${refresh}` },
     });
@@ -128,6 +128,39 @@ async function refreshSession(): Promise<string | null> {
   }
 }
 
+/** Upload one image; the returned blob ref goes into the post's embed. */
+async function uploadBlob(
+  m: MediaAttachment
+): Promise<{ ok: true; blob: unknown } | { ok: false; error: string }> {
+  let token = getAccessToken('bluesky');
+  if (!token) return { ok: false, error: 'Bluesky is not connected.' };
+
+  const attempt = (t: string) =>
+    fetch(`${PDS()}/xrpc/com.atproto.repo.uploadBlob`, {
+      method: 'POST',
+      headers: { 'Content-Type': m.mime, Authorization: `Bearer ${t}` },
+      body: m.bytes as BodyInit,
+    });
+
+  try {
+    let res = await attempt(token);
+    if (res.status === 400 || res.status === 401) {
+      const body = await res.clone().text();
+      if (/ExpiredToken|invalid.?token/i.test(body)) {
+        const fresh = await refreshSession();
+        if (!fresh) return { ok: false, error: 'The Bluesky session expired.' };
+        res = await attempt(fresh);
+      }
+    }
+    if (!res.ok) return { ok: false, error: `Bluesky refused the image: ${(await res.text()).slice(0, 160)}` };
+    const parsed = (await res.json()) as { blob?: unknown };
+    if (!parsed.blob) return { ok: false, error: 'Bluesky stored the image but returned no blob reference.' };
+    return { ok: true, blob: parsed.blob };
+  } catch (e) {
+    return { ok: false, error: `Could not reach ${PDS()}: ${(e as Error).message}` };
+  }
+}
+
 interface CreateRecordResponse {
   uri: string;
   cid: string;
@@ -140,7 +173,7 @@ interface CreateRecordResponse {
  */
 export async function publishToBluesky(
   text: string,
-  opts: { did: string; handle: string; idempotencyKey?: string }
+  opts: { did: string; handle: string; idempotencyKey?: string; media?: MediaAttachment[] }
 ): Promise<PublishResult> {
   const length = graphemeLength(text);
   if (length === 0) return { ok: false, error: 'Nothing to post.' };
@@ -148,15 +181,30 @@ export async function publishToBluesky(
     return { ok: false, error: `Too long for Bluesky: ${length} of ${MAX_GRAPHEMES} characters.` };
   }
 
+  // Images go up first, each as a blob, then travel in the record as an
+  // embed. AT Protocol caps a post at four; alt text is a required field on
+  // the embed itself — the one platform where accessibility is in the schema.
+  let embed: Record<string, unknown> | undefined;
+  if (opts.media && opts.media.length > 0) {
+    const images: { alt: string; image: unknown }[] = [];
+    for (const m of opts.media.slice(0, 4)) {
+      const up = await uploadBlob(m);
+      if (!up.ok) return { ok: false, error: up.error };
+      images.push({ alt: m.altText ?? '', image: up.blob });
+    }
+    embed = { $type: 'app.bsky.embed.images', images };
+  }
+
   const record = {
     $type: 'app.bsky.feed.post',
     text,
     facets: buildFacets(text),
+    ...(embed ? { embed } : {}),
     createdAt: new Date().toISOString(),
   };
 
   const attempt = async (token: string): Promise<Response> =>
-    fetch(`${PDS}/xrpc/com.atproto.repo.createRecord`, {
+    fetch(`${PDS()}/xrpc/com.atproto.repo.createRecord`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify({ repo: opts.did, collection: 'app.bsky.feed.post', record }),
@@ -206,7 +254,7 @@ export async function publishToBluesky(
       url: `https://bsky.app/profile/${opts.handle}/post/${rkey}`,
     };
   } catch (e) {
-    return { ok: false, error: `Could not reach ${PDS}: ${(e as Error).message}` };
+    return { ok: false, error: `Could not reach ${PDS()}: ${(e as Error).message}` };
   }
 }
 
@@ -230,7 +278,7 @@ export async function fetchBlueskyMetrics(
   if (!token) return { ok: false, error: 'Bluesky is not connected.' };
 
   const call = async (t: string): Promise<Response> =>
-    fetch(`${PDS}/xrpc/app.bsky.feed.getPosts?uris=${encodeURIComponent(uri)}`, {
+    fetch(`${PDS()}/xrpc/app.bsky.feed.getPosts?uris=${encodeURIComponent(uri)}`, {
       headers: { Authorization: `Bearer ${t}` },
     });
 
@@ -261,6 +309,6 @@ export async function fetchBlueskyMetrics(
 
     return { ok: true, metrics: { impressions: null, engagements, clicks: null } };
   } catch (e) {
-    return { ok: false, error: `Could not reach ${PDS}: ${(e as Error).message}` };
+    return { ok: false, error: `Could not reach ${PDS()}: ${(e as Error).message}` };
   }
 }

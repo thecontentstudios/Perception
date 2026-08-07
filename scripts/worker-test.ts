@@ -255,6 +255,8 @@ async function main() {
 
   await facebookSection();
 
+  await mediaSection();
+
   await cleanup();
 }
 
@@ -437,6 +439,167 @@ async function facebookSection() {
       : bad(`revoked publish: ${JSON.stringify(dead)}`);
   } finally {
     removeGrant('facebook');
+  }
+}
+
+
+/**
+ * Phase 13 — pictures through the pipe.
+ *
+ * The library has stored and alt-texted images since the media phase, and
+ * nothing it held could reach a platform: every publisher was text-only,
+ * which blocked Instagram outright and made "upload" a promise about a
+ * database. This drives an image through each live adapter over the wire,
+ * and checks the property that is easiest to lose: the alt text survives to
+ * the platform, where it does its job.
+ */
+async function mediaSection() {
+  console.log('\n== An image travels with the post, alt text and all ==');
+
+  const fakePng = new TextEncoder().encode('not-really-a-png-but-137-bytes-of-stand-in-image-payload-' + 'x'.repeat(79));
+  const media = [{ bytes: fakePng, mime: 'image/png', altText: 'A crew mulching a garden bed at dusk' }];
+
+  // Mastodon — against the mock already running for the worker sections.
+  {
+    const { mastodonPublisher } = await import('../src/lib/publishers/mastodon');
+    saveGrant({
+      channel: 'mastodon',
+      accessToken: process.env.MOCK_TOKEN || 'mock-access-token',
+      refreshToken: null, expiresInSec: null, scopes: ['write:statuses', 'write:media'],
+      accountLabel: '@greenscape', externalAccountId: `${HOST}|1|500`,
+    });
+    try {
+      const out = await mastodonPublisher.publish('New beds going in this week.', { media });
+      out.ok ? ok('mastodon: photo post published') : bad(`mastodon publish failed: ${out.error}`);
+      const wire = await fetch(`${MOCK}/__posts`).then((r) => r.json());
+      const last = wire.posts[wire.posts.length - 1];
+      last?.media_attachments?.length === 1
+        ? ok('mastodon: the status carries its attachment')
+        : bad(`mastodon attachments: ${JSON.stringify(last?.media_attachments)}`);
+      last?.media_attachments?.[0]?.description === media[0].altText
+        ? ok('mastodon: alt text survived as description')
+        : bad(`mastodon description: ${last?.media_attachments?.[0]?.description}`);
+    } finally {
+      removeGrant('mastodon');
+    }
+  }
+
+  // Bluesky — against its own stand-in PDS.
+  {
+    const BSKY = process.env.BLUESKY_PDS_URL || 'http://localhost:4326';
+    const up = await fetch(`${BSKY}/__posts`).then((r) => r.ok).catch(() => false);
+    if (!up) {
+      bad('mock-bluesky is not running — start it with: node scripts/mock-bluesky.js');
+    } else {
+      await fetch(`${BSKY}/__reset`, { method: 'POST' });
+      process.env.BLUESKY_PDS_URL = BSKY;
+      const { publishToBluesky } = await import('../src/lib/publishers/bluesky');
+      saveGrant({
+        channel: 'bluesky',
+        accessToken: process.env.MOCK_BSKY_TOKEN || 'mock-bsky-access-jwt',
+        refreshToken: 'mock-refresh', expiresInSec: 7200, scopes: ['app-password session'],
+        accountLabel: '@greenscape.bsky.social', externalAccountId: 'did:plc:mockmockmock',
+      });
+      try {
+        const out = await publishToBluesky('New beds going in this week.', {
+          did: 'did:plc:mockmockmock', handle: 'greenscape.bsky.social', media,
+        });
+        out.ok ? ok('bluesky: photo post published') : bad(`bluesky publish failed: ${out.error}`);
+        const wire = await fetch(`${BSKY}/__posts`).then((r) => r.json());
+        const rec = wire.records[wire.records.length - 1];
+        rec?.embed?.$type === 'app.bsky.embed.images' && rec.embed.images?.length === 1
+          ? ok('bluesky: the record embeds the uploaded blob')
+          : bad(`bluesky embed: ${JSON.stringify(rec?.embed)?.slice(0, 120)}`);
+        rec?.embed?.images?.[0]?.alt === media[0].altText
+          ? ok('bluesky: alt text survived — required by the embed schema itself')
+          : bad(`bluesky alt: ${rec?.embed?.images?.[0]?.alt}`);
+      } finally {
+        removeGrant('bluesky');
+      }
+    }
+  }
+
+  // Facebook — the photos edge, where the text becomes the caption.
+  {
+    const META = process.env.META_BASE_URL || 'http://localhost:4325';
+    const { facebookPublisher } = await import('../src/lib/publishers/meta');
+    await fetch(`${META}/__reset`, { method: 'POST' });
+    saveGrant({
+      channel: 'facebook',
+      accessToken: process.env.MOCK_META_TOKEN || 'mock-page-token',
+      refreshToken: null, expiresInSec: null, scopes: ['pages_manage_posts'],
+      accountLabel: 'Summit Local (Page)',
+      externalAccountId: process.env.MOCK_META_PAGE_ID || '108000000001',
+    });
+    try {
+      const out = await facebookPublisher.publish('New beds going in this week.', { media });
+      out.ok ? ok('facebook: photo post published via the /photos edge') : bad(`facebook publish failed: ${out.error}`);
+      const wire = await fetch(`${META}/__posts`).then((r) => r.json());
+      const last = wire.posts[wire.posts.length - 1];
+      last?.photo === true && last?.message === 'New beds going in this week.'
+        ? ok('facebook: the text rode as the photo caption')
+        : bad(`facebook post: ${JSON.stringify(last)?.slice(0, 120)}`);
+      last?.altText === media[0].altText
+        ? ok('facebook: alt text survived the multipart trip')
+        : bad(`facebook alt: ${last?.altText}`);
+      last?.bytes === fakePng.length
+        ? ok(`facebook: every byte arrived (${last.bytes})`)
+        : bad(`facebook bytes: sent ${fakePng.length}, platform saw ${last?.bytes}`);
+    } finally {
+      removeGrant('facebook');
+    }
+  }
+
+  // The other half of the acceptance: an approved image that has vanished
+  // from storage fails the job before anything reaches a platform. A
+  // text-only post standing in for a photo post is not a smaller version of
+  // it — it is a different post nobody approved.
+  {
+    const { runPublishJob } = await import('../src/lib/queue/publish-job');
+    const item = await db.contentItem.findFirst({ select: { id: true, campaign: { select: { organizationId: true } } } });
+    if (!item) {
+      bad('no content item to attach the missing-media check to');
+    } else {
+      const vid = 'v-media-missing-test';
+      await db.channelVariation.deleteMany({ where: { id: vid } });
+      await db.channelVariation.create({
+        data: {
+          id: vid, contentItemId: item.id, channel: 'MASTODON', format: 'update',
+          status: 'SCHEDULED', scheduledAt: new Date(Date.now() - 1000),
+          body: 'This post should never leave the building.', hashtags: [], hasUnsubscribeFooter: false,
+        },
+      });
+      const ghost = await db.mediaAsset.create({
+        data: {
+          organizationId: item.campaign.organizationId, kind: 'image',
+          storageKey: 'aa/aa/' + '0'.repeat(64) + '.png', fileName: 'ghost.png',
+          mimeType: 'image/png', sizeBytes: 1, altText: 'A file that is not there',
+        },
+      });
+      await db.variationMedia.create({ data: { variationId: vid, assetId: ghost.id } });
+      saveGrant({
+        channel: 'mastodon', accessToken: process.env.MOCK_TOKEN || 'mock-access-token',
+        refreshToken: null, expiresInSec: null, scopes: ['write:statuses'],
+        accountLabel: '@greenscape', externalAccountId: `${HOST}|1|500`,
+      });
+      try {
+        const before = (await fetch(`${MOCK}/__posts`).then((r) => r.json())).count;
+        const out = await runPublishJob({ variationId: vid, idempotencyKey: `missing-media-${vid}` });
+        out.status === 'failed' && /missing/.test(out.detail)
+          ? ok(`a vanished image fails the job (${out.detail})`)
+          : bad(`expected media failure, got ${out.status}: ${out.detail}`);
+        const after = (await fetch(`${MOCK}/__posts`).then((r) => r.json())).count;
+        after === before
+          ? ok('and nothing reached the platform — no text-only stand-in was posted')
+          : bad('a post went out despite the missing image');
+      } finally {
+        removeGrant('mastodon');
+        await db.publicationAttempt.deleteMany({ where: { variationId: vid } });
+        await db.variationMedia.deleteMany({ where: { variationId: vid } });
+        await db.mediaAsset.delete({ where: { id: ghost.id } }).catch(() => {});
+        await db.channelVariation.deleteMany({ where: { id: vid } });
+      }
+    }
   }
 }
 

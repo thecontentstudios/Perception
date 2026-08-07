@@ -71,6 +71,22 @@ http
       return send(res, 200, { ok: true });
     }
 
+    // POST /v21.0/{page-id}/photos — a photo post; the text is its caption.
+    if (url.pathname === `/v21.0/${PAGE_ID}/photos` && req.method === 'POST') {
+      // multipart: token travels as a form field here, not a query param.
+      const cap = /name="caption"\r\n\r\n([^\r]*)/.exec(raw);
+      const alt = /name="alt_text_custom"\r\n\r\n([^\r]*)/.exec(raw);
+      const tok = /name="access_token"\r\n\r\n([^\r]*)/.exec(raw);
+      const file = /name="source"[^]*?\r\n\r\n([^]*?)\r\n--/.exec(raw);
+      if ((tok ? tok[1] : '') !== TOKEN || revoked) {
+        return graphError(res, 401, 190, 'Error validating access token: the session is invalid.');
+      }
+      if (!file) return graphError(res, 400, 100, 'The parameter source is required.');
+      const id = `${PAGE_ID}_${crypto.randomBytes(8).toString('hex')}`;
+      posts.push({ id, message: cap ? cap[1] : '', photo: true, altText: alt ? alt[1] : null, bytes: file[1].length });
+      return send(res, 200, { id: crypto.randomBytes(6).toString('hex'), post_id: id });
+    }
+
     // ---- the Graph API ---------------------------------------------------
     // Tokens travel as a form field or query param, never a header — one of
     // the small ways Graph differs from everything else.

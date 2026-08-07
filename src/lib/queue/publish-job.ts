@@ -2,6 +2,8 @@ import { db } from '../db';
 import { loadWorkspace } from '../queries';
 import { preflight, type PreflightContext } from '../preflight';
 import { publisherFor } from '../publishers/registry';
+import type { MediaAttachment } from '../publishers/types';
+import { storage } from '../storage';
 
 import type { PublishJobData } from './index';
 
@@ -165,7 +167,36 @@ export async function runPublishJob(data: PublishJobData): Promise<JobResult> {
     }
 
     const text = [v.body, v.hashtags.join(' ')].filter(Boolean).join('\n\n');
-    const out = await publisher.publish(text, { idempotencyKey });
+
+    // 3a — The images, as bytes. Loaded here rather than inside a publisher
+    // because three platforms need the same read and the failure belongs to
+    // the job, not the adapter: a missing file is a fact about our storage,
+    // and it fails *before* anything is posted — a text-only post standing in
+    // for an approved photo post is not a smaller version of it, it is a
+    // different post nobody approved.
+    const media: MediaAttachment[] = [];
+    for (const asset of await db.variationMedia.findMany({
+      where: { variationId },
+      orderBy: { position: 'asc' },
+      select: { asset: { select: { storageKey: true, mimeType: true, altText: true, kind: true } } },
+    })) {
+      if (asset.asset.kind !== 'image') continue;
+      try {
+        const bytes = await storage().get(asset.asset.storageKey);
+        media.push({ bytes, mime: asset.asset.mimeType, altText: asset.asset.altText });
+      } catch {
+        await db.channelVariation.update({
+          where: { id: variationId },
+          data: { status: 'FAILED', claimedAt: null },
+        });
+        return finish(
+          { status: 'failed', detail: 'an approved image is missing from storage' },
+          { code: 'media_missing', message: `The image for this post (${asset.asset.storageKey}) is no longer in storage.` }
+        );
+      }
+    }
+
+    const out = await publisher.publish(text, { idempotencyKey, media });
 
     if (!out.ok) {
       const retryable = isRetryable(out.error ?? '', out.needsReconnect);

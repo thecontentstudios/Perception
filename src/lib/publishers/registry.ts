@@ -56,7 +56,7 @@ export const blueskyPublisher: Publisher = {
   async publish(text, opts) {
     const ctx = blueskyContext();
     if (!ctx) return { ok: false, error: 'Bluesky is not connected.', needsReconnect: true };
-    const r = await publishToBluesky(text, { ...ctx, idempotencyKey: opts.idempotencyKey });
+    const r = await publishToBluesky(text, { ...ctx, idempotencyKey: opts.idempotencyKey, media: opts.media });
     return { ok: r.ok, id: r.uri, url: r.url, error: r.error, needsReconnect: r.needsReconnect };
   },
 

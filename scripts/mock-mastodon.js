@@ -20,6 +20,8 @@ const posts = [];
 const byKey = new Map();
 /** Per-status engagement counters a test can set. */
 const engagement = new Map();
+/** Uploaded media, by id, so a status can reference it. */
+const mediaStore = new Map();
 
 const send = (res, status, body) => {
   res.writeHead(status, { 'content-type': 'application/json' });
@@ -39,6 +41,22 @@ http
       return send(res, 200, { id: '1', username: 'greenscape', acct: 'greenscape' });
     }
 
+    // POST /api/v2/media — image upload. Parsed loosely: the tests send
+    // ASCII stand-in bytes, and what matters on this side is that the
+    // description (Mastodon's name for alt text) survives the trip.
+    if (req.url === '/api/v2/media' && req.method === 'POST') {
+      if (auth !== TOKEN) return send(res, 401, { error: 'The access token is invalid' });
+      let body = '';
+      req.on('data', (c) => (body += c));
+      return req.on('end', () => {
+        const desc = /name="description"\r\n\r\n([^\r]*)/.exec(body);
+        const file = /name="file"[^]*?\r\n\r\n([^]*?)\r\n--/.exec(body);
+        const id = String(700 + mediaStore.size);
+        mediaStore.set(id, { description: desc ? desc[1] : null, bytes: file ? file[1].length : 0 });
+        send(res, 200, { id, type: 'image', description: desc ? desc[1] : null });
+      });
+    }
+
     if (req.url === '/api/v1/statuses' && req.method === 'POST') {
       if (auth !== TOKEN) return send(res, 401, { error: 'The access token is invalid' });
       let body = '';
@@ -48,8 +66,9 @@ http
         // The behaviour the retry policy leans on: the same key returns the
         // original status rather than creating a second one.
         if (key && byKey.has(key)) return send(res, 200, byKey.get(key));
-        const { status } = JSON.parse(body || '{}');
-        const post = { id: String(posts.length + 1), url: `http://localhost:${port}/@greenscape/${posts.length + 1}`, content: status };
+        const { status, media_ids } = JSON.parse(body || '{}');
+        const attachments = (media_ids || []).map((id) => mediaStore.get(String(id))).filter(Boolean);
+        const post = { id: String(posts.length + 1), url: `http://localhost:${port}/@greenscape/${posts.length + 1}`, content: status, media_attachments: attachments };
         posts.push(post);
         if (key) byKey.set(key, post);
         send(res, 200, post);
@@ -118,6 +137,7 @@ http
       posts.length = 0;
       byKey.clear();
       engagement.clear();
+      mediaStore.clear();
       return send(res, 200, { reset: true });
     }
 

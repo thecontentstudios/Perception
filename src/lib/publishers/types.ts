@@ -57,6 +57,22 @@ export interface PostMetrics {
   missing?: boolean;
 }
 
+/**
+ * An image travelling with a post.
+ *
+ * Bytes, not a URL. Mastodon and Bluesky both demand an upload — they will
+ * not fetch a link — and a URL-based contract would work for exactly one of
+ * the three platforms while quietly coupling the other two to our hosting.
+ * The alt text rides along because every platform accepts it at upload time
+ * and dropping it there would undo the library's accessibility checks at the
+ * last step.
+ */
+export interface MediaAttachment {
+  bytes: Uint8Array;
+  mime: string;
+  altText: string | null;
+}
+
 export interface Publisher {
   capabilities: PublisherCapabilities;
   /** Count text the way this platform counts it. */
@@ -64,7 +80,7 @@ export interface Publisher {
   /** Cheap local validation before any network call. */
   check(text: string): { ok: boolean; length: number; error?: string };
   /** Publish. Implementations handle their own token refresh. */
-  publish(text: string, opts: { idempotencyKey?: string }): Promise<PublishOutcome>;
+  publish(text: string, opts: { idempotencyKey?: string; media?: MediaAttachment[] }): Promise<PublishOutcome>;
   /** Confirm the stored credential still works, and say who it belongs to. */
   verify(): Promise<{ ok: boolean; account?: string; error?: string }>;
   /**

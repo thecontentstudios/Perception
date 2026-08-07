@@ -317,14 +317,19 @@ posts carries a picture, and nothing anyone says back reaches the screen.
 
 ## The plan, continued
 
-### Phase 13 — Pictures through the pipe
+### Phase 13 — Pictures through the pipe — **done**
 
-Media end to end: variation → publisher. Bluesky (`uploadBlob` + embed),
-Mastodon (`/api/v2/media` + attachment), Facebook (`/photos` edge). The
-library, alt-text checks and storage already exist — this is the missing
-last mile. Acceptance: a post with an image arrives on all three platforms
-with its alt text; a variation whose image is missing fails preflight, not
-publish.
+Media end to end: variation → publisher, as **bytes** — Mastodon and Bluesky
+demand an upload, and a URL contract would have coupled the other two to our
+hosting. Bluesky `uploadBlob` + `app.bsky.embed.images` (alt text required by
+the schema itself), Mastodon `/api/v2/media` with `description`, Facebook the
+`/photos` edge where the text becomes the caption. One hand-built multipart
+encoder the mocks can parse back; a new stand-in PDS for Bluesky.
+
+**Acceptance — met.** The same image arrived on all three platforms with its
+alt text intact and byte-for-byte length verified; a variation whose approved
+image has vanished from storage fails the job *before* anything is posted —
+a text-only stand-in for a photo post is a different post nobody approved.
 
 ### Phase 14 — Instagram and Threads
 

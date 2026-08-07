@@ -1,5 +1,6 @@
 import { getAccessToken, summaries } from '../oauth/store';
-import type { Publisher, PublishOutcome } from './types';
+import type { MediaAttachment, Publisher, PublishOutcome } from './types';
+import { buildMultipart } from './multipart';
 
 /**
  * Mastodon publishing over the REST API.
@@ -121,6 +122,16 @@ export const mastodonPublisher: Publisher = {
     const local = this.check(text);
     if (!local.ok) return { ok: false, error: local.error };
 
+    // Images first: /api/v2/media per file, then their ids ride on the
+    // status. `description` is Mastodon's name for alt text, set at upload —
+    // there is no second chance to attach it after the post exists.
+    const mediaIds: string[] = [];
+    for (const m of (opts as { media?: MediaAttachment[] }).media ?? []) {
+      const up = await uploadMastodonMedia(ctx.host, token, m);
+      if (!up.ok) return { ok: false, error: up.error };
+      mediaIds.push(up.id);
+    }
+
     const res = await api<{ id: string; url: string }>(ctx.host, '/api/v1/statuses', {
       method: 'POST',
       token,
@@ -130,7 +141,7 @@ export const mastodonPublisher: Publisher = {
         // window returns the original status instead of creating a second one.
         'Idempotency-Key': opts.idempotencyKey ?? `${ctx.host}:${text.slice(0, 40)}`,
       },
-      body: JSON.stringify({ status: text, visibility: 'public' }),
+      body: JSON.stringify({ status: text, visibility: 'public', ...(mediaIds.length ? { media_ids: mediaIds } : {}) }),
     });
 
     if (!res.ok) {
@@ -199,3 +210,30 @@ export const mastodonPublisher: Publisher = {
     return { ok: true, metrics: { impressions: null, engagements, clicks: null } };
   },
 };
+
+/** Upload one image to the instance; the id rides on the status that follows. */
+async function uploadMastodonMedia(
+  host: string,
+  token: string,
+  m: MediaAttachment
+): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
+  const { body, contentType } = buildMultipart(
+    m.altText ? { description: m.altText } : {},
+    [{ field: 'file', filename: 'upload', mime: m.mime, bytes: m.bytes }]
+  );
+  try {
+    const scheme = /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(host) ? 'http' : 'https';
+    const res = await fetch(`${scheme}://${host}/api/v2/media`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'content-type': contentType },
+      body: body as BodyInit,
+    });
+    const text = await res.text();
+    if (!res.ok) return { ok: false, error: `${host} refused the image: ${text.slice(0, 160)}` };
+    const parsed = JSON.parse(text) as { id?: string };
+    if (!parsed.id) return { ok: false, error: `${host} stored the image but returned no id.` };
+    return { ok: true, id: parsed.id };
+  } catch (e) {
+    return { ok: false, error: `Could not reach ${host}: ${(e as Error).message}` };
+  }
+}

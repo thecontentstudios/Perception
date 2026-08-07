@@ -1,5 +1,6 @@
 import { getAccessToken, summaries } from '../oauth/store';
-import type { PostMetrics, Publisher, PublishOutcome } from './types';
+import type { MediaAttachment, PostMetrics, Publisher, PublishOutcome } from './types';
+import { buildMultipart } from './multipart';
 
 /**
  * Facebook Page publishing over the Graph API.
@@ -87,7 +88,7 @@ export const facebookPublisher: Publisher = {
     return { ok: true, length };
   },
 
-  async publish(text, _opts): Promise<PublishOutcome> {
+  async publish(text, opts): Promise<PublishOutcome> {
     const ctx = pageContext();
     if (!ctx) return { ok: false, error: 'Facebook is not connected.', needsReconnect: true };
 
@@ -97,6 +98,44 @@ export const facebookPublisher: Publisher = {
     // No idempotency key: the Graph feed edge has none. The worker's
     // compare-and-swap claim is the only duplicate protection, which is the
     // same position every Facebook client is in.
+    //
+    // A post with an image goes to the /photos edge with the text as its
+    // caption — that is how a photo post is made; attaching media to /feed is
+    // a link preview, not a picture. Bytes rather than a URL, because a URL
+    // would require our media host to be publicly reachable by Meta's
+    // fetchers, which localhost and half of small-business hosting are not.
+    const media = (opts as { media?: MediaAttachment[] }).media ?? [];
+    if (media.length > 0) {
+      const m = media[0];
+      const token = getAccessToken('facebook');
+      const { body, contentType } = buildMultipart(
+        { caption: text, access_token: token ?? '', ...(m.altText ? { alt_text_custom: m.altText } : {}) },
+        [{ field: 'source', filename: 'upload', mime: m.mime, bytes: m.bytes }]
+      );
+      try {
+        const res = await fetch(`${BASE()}/v21.0/${ctx.pageId}/photos`, {
+          method: 'POST',
+          headers: { 'content-type': contentType },
+          body: body as BodyInit,
+        });
+        const textBody = await res.text();
+        let parsed: { id?: string; post_id?: string; error?: { code?: number; message?: string } } = {};
+        try { parsed = JSON.parse(textBody); } catch { /* handled below */ }
+        if (!res.ok) {
+          return {
+            ok: false,
+            error: `Facebook rejected the photo: ${parsed.error?.message ?? res.status}`,
+            needsReconnect: needsReconnect(parsed.error?.code ?? 0),
+          };
+        }
+        const id = String(parsed.post_id ?? parsed.id ?? '');
+        if (!id) return { ok: false, error: 'Facebook stored the photo but returned no post id.' };
+        return { ok: true, id, url: `https://www.facebook.com/${id}` };
+      } catch (e) {
+        return { ok: false, error: `Could not reach the Graph API: ${(e as Error).message}` };
+      }
+    }
+
     const r = await graph(`/v21.0/${ctx.pageId}/feed`, { method: 'POST', form: { message: text } });
     if (!r.ok) {
       return { ok: false, error: `Facebook rejected the post: ${r.message}`, needsReconnect: needsReconnect(r.code) };
