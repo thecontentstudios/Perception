@@ -355,13 +355,17 @@ refresh (now a worker duty, not a button) write a visible last-run, and the
 report says "platform numbers as of" — a stale number can look stale.
 Facebook comment webhooks wait on app review, stated rather than faked.
 
-### Phase 16 — Close the ad loop
+### Phase 16 — Close the ad loop — **done**
 
-The flight's results beside its money. Conversions already carry
-`utmCampaign`; flights already stamp `utm_source`/`utm_campaign` on their
-destination. Join them: each flight shows clicks, conversions and revenue it
-caused, and cost per result computed only from settled spend — exact money
-over measured outcomes, the range carried, never a blended average.
+The flight's results beside its money. The missing link was that every
+flight stamped the *same* campaign tag; now the destination carries the
+flight's own id (`utm_campaign=pf_<id>`), the landing-page snippet reads it
+back, and every conversion it sends resolves to the flight that caused it.
+Each flight shows its conversions, revenue and cost per result — the settled
+invoice divided by measured outcomes, labelled `exact`, or dashboard spend
+labelled `estimated` with the ~ it deserves, and no number at all until
+there is at least one result. Never the platform's self-graded conversion
+column.
 
 ### Phase 17 — The rest of the registry, tiered honestly
 

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, dbAvailable } from '@/lib/db';
 import { handle, require_, HttpError } from '@/lib/auth/guard';
-import { briefFor, planFlight, type FlightPlan } from '@/lib/flights';
+import { briefFor, flightResults, planFlight, type FlightPlan } from '@/lib/flights';
 
 export const dynamic = 'force-dynamic';
 
@@ -68,12 +68,17 @@ export async function GET() {
 
     return NextResponse.json({
       ok: true,
-      flights: flights.map((f) => ({
-        ...f,
-        spend: undefined,
-        estimatedCents: f.spend.filter((s) => s.certainty === 'estimated').reduce((a, b) => a + b.cents, 0),
-        exactCents: f.spend.filter((s) => s.certainty === 'exact').reduce((a, b) => a + b.cents, 0),
-      })),
+      flights: await Promise.all(
+        flights.map(async (f) => ({
+          ...f,
+          spend: undefined,
+          estimatedCents: f.spend.filter((s) => s.certainty === 'estimated').reduce((a, b) => a + b.cents, 0),
+          exactCents: f.spend.filter((s) => s.certainty === 'exact').reduce((a, b) => a + b.cents, 0),
+          // What the flight caused, from our own snippet's UTM captures —
+          // never the platform's self-graded conversion column.
+          results: await flightResults(principal.organizationId, f),
+        }))
+      ),
     });
   });
 }

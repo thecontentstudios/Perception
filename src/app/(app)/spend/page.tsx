@@ -36,6 +36,12 @@ interface FlightRow {
   estimatedCents: number;
   exactCents: number;
   settledCents: number | null;
+  results?: {
+    conversions: number;
+    revenueCents: number;
+    costPerResultCents: number | null;
+    certainty: 'exact' | 'estimated' | null;
+  };
 }
 
 interface Ledger {
@@ -452,6 +458,8 @@ export default function SpendPage() {
                     <th className="num">Should buy</th>
                     <th className="num">Estimated</th>
                     <th className="num">Settled</th>
+                    <th className="num">Results</th>
+                    <th className="num">Cost / result</th>
                     <th aria-label="actions" />
                   </tr>
                 </thead>
@@ -474,6 +482,29 @@ export default function SpendPage() {
                         {f.estimatedCents ? `~${amount(f.estimatedCents)}` : '—'}
                       </td>
                       <td className="num">{f.settledCents != null ? amount(f.settledCents) : f.exactCents ? amount(f.exactCents) : '—'}</td>
+                      <td className="num">
+                        {f.results && f.results.conversions > 0
+                          ? `${f.results.conversions}${f.results.revenueCents > 0 ? ` · ${amount(f.results.revenueCents)}` : ''}`
+                          : '—'}
+                      </td>
+                      <td
+                        className="num"
+                        // An estimated cost-per-result is set the way every
+                        // estimate on this screen is set: visibly weaker
+                        // than a settled figure, so nobody quotes it.
+                        style={f.results?.certainty === 'estimated' ? { color: 'var(--muted)', fontStyle: 'italic' } : undefined}
+                        title={
+                          f.results?.certainty === 'estimated'
+                            ? 'Based on dashboard-reported spend. Settles with the invoice.'
+                            : f.results?.certainty === 'exact'
+                              ? 'Settled invoice divided by measured results.'
+                              : 'Appears once the flight has at least one measured result.'
+                        }
+                      >
+                        {f.results?.costPerResultCents != null
+                          ? `${f.results.certainty === 'estimated' ? '~' : ''}${amount(f.results.costPerResultCents)}`
+                          : '—'}
+                      </td>
                       <td>
                         <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
                           <button type="button" className="btn ghost" onClick={() => void act(f.id, { action: 'handoff' })}>

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { db } from './db';
 import { AD_RATES } from './pricing';
 import type { Channel } from './types';
@@ -104,10 +105,16 @@ export async function planFlight(organizationId: string, plan: FlightPlan) {
   if (problems.length > 0) return { ok: false as const, problems };
 
   const est = estimateOutcome(plan.channel, plan.dailyCents * plan.days);
-  const destination = withUtm(plan.destinationUrl, plan.channel);
+
+  // The id is minted before the row so the destination URL can carry it.
+  // One shared utm_campaign across flights would make results attributable
+  // to "ads, generally" — which is a report about nothing.
+  const id = `fl${randomUUID().replace(/-/g, '').slice(0, 22)}`;
+  const destination = withUtm(plan.destinationUrl, plan.channel, id);
 
   const flight = await db.adFlight.create({
     data: {
+      id,
       organizationId,
       brandId: plan.brandId ?? null,
       campaignId: plan.campaignId ?? null,
@@ -127,18 +134,87 @@ export async function planFlight(organizationId: string, plan: FlightPlan) {
 }
 
 /**
- * The destination, already carrying its attribution.
+ * The destination, already carrying its attribution — **per flight**.
  *
  * Minted at planning time rather than left for the owner to remember inside
  * the ads manager, because a click that arrives without UTMs is a conversion
- * the flight caused and can never be credited with.
+ * the flight caused and can never be credited with. The campaign tag is the
+ * flight's own id: the snippet on the landing page reads it back off the URL
+ * and sends it with every conversion, which is the entire mechanism that
+ * lets a flight show what it caused.
  */
-export function withUtm(url: string, channel: Channel): string {
+export function withUtm(url: string, channel: Channel, flightId: string): string {
   const u = new URL(url);
   u.searchParams.set('utm_source', channel);
   u.searchParams.set('utm_medium', 'paid');
-  u.searchParams.set('utm_campaign', 'perception_flight');
+  u.searchParams.set('utm_campaign', `pf_${flightId}`);
   return u.toString();
+}
+
+// ---------------------------------------------------------------------------
+// What the flight caused
+// ---------------------------------------------------------------------------
+
+export interface FlightResults {
+  conversions: number;
+  revenueCents: number;
+  byKind: Record<string, number>;
+  /**
+   * What one result cost. Null until there is at least one result — a CPA
+   * with zero in the denominator is not a big number, it is no number.
+   */
+  costPerResultCents: number | null;
+  /**
+   * exact once the invoice settled, estimated while the spend is a dashboard
+   * figure. The same word the ledger uses, because it is the same fact.
+   */
+  certainty: 'exact' | 'estimated' | null;
+}
+
+/**
+ * Conversions the flight's own UTM tag brought in, joined to its money.
+ *
+ * The spend side is exact the moment the invoice settles; the results side
+ * is only ever what our snippet measured. Cost-per-result divides exact
+ * money by measured outcomes and says which it is — never a blend, and
+ * never a platform's self-graded "conversions" column.
+ */
+export async function flightResults(
+  organizationId: string,
+  flight: { id: string; status: string; settledCents: number | null }
+): Promise<FlightResults> {
+  const conversions = await db.conversion.findMany({
+    where: {
+      organizationId,
+      attribution: { path: ['utmCampaign'], equals: `pf_${flight.id}` },
+    },
+    select: { kind: true, valueCents: true },
+  });
+
+  const byKind: Record<string, number> = {};
+  for (const c of conversions) byKind[c.kind] = (byKind[c.kind] ?? 0) + 1;
+
+  let spentCents: number | null = null;
+  let certainty: 'exact' | 'estimated' | null = null;
+  if (flight.status === 'settled' && flight.settledCents != null) {
+    spentCents = flight.settledCents;
+    certainty = 'exact';
+  } else {
+    const est = await db.spendEntry.aggregate({ where: { flightId: flight.id }, _sum: { cents: true } });
+    if ((est._sum.cents ?? 0) > 0) {
+      spentCents = est._sum.cents!;
+      certainty = 'estimated';
+    }
+  }
+
+  return {
+    conversions: conversions.length,
+    revenueCents: conversions.reduce((a, c) => a + c.valueCents, 0),
+    byKind,
+    costPerResultCents:
+      conversions.length > 0 && spentCents != null ? Math.round(spentCents / conversions.length) : null,
+    certainty: conversions.length > 0 && spentCents != null ? certainty : null,
+  };
 }
 
 // ---------------------------------------------------------------------------

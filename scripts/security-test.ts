@@ -1435,6 +1435,7 @@ async function main() {
       const auth = { cookie, 'content-type': 'application/json' };
       const orgId = (await db.membership.findFirst({ where: { userId: user.id } }))?.organizationId ?? '';
 
+      const stampF = Date.now();
       // Below the platform's posted daily floor → refused with the reason.
       const tooSmall = await fetch(`${BASE}/api/flights`, {
         method: 'POST', headers: auth,
@@ -1532,6 +1533,49 @@ async function main() {
       lateSpend.status === 422
         ? ok('spend after settlement is refused — the invoice is the record now')
         : bad(`post-settlement spend gave ${lateSpend.status}`);
+
+      // ---- Phase 16: the loop closes — results beside the money ----------
+      // The destination carries the flight's own id, so the snippet on the
+      // landing page can send it back with every conversion.
+      new RegExp(`utm_campaign=pf_${flightId}`).test(planned.flight?.destinationUrl ?? '')
+        ? ok('the destination UTM names this flight, not "ads, generally"')
+        : bad(`destination: ${planned.flight?.destinationUrl}`);
+
+      // Two conversions arrive carrying the tag; one arrives without it.
+      await db.conversion.createMany({
+        data: [
+          {
+            organizationId: orgId, kind: 'purchase', valueCents: 12000,
+            externalId: `flight-conv-1-${stampF}`,
+            attribution: { basis: 'utm', utmCampaign: `pf_${flightId}` },
+          },
+          {
+            organizationId: orgId, kind: 'form_submission', valueCents: 0,
+            externalId: `flight-conv-2-${stampF}`,
+            attribution: { basis: 'utm', utmCampaign: `pf_${flightId}` },
+          },
+          {
+            organizationId: orgId, kind: 'purchase', valueCents: 99900,
+            externalId: `flight-conv-3-${stampF}`,
+            attribution: { basis: 'utm', utmCampaign: 'pf_someoneelse' },
+          },
+        ],
+      });
+
+      const listed = await fetch(`${BASE}/api/flights`, { headers: { cookie } }).then((r) => r.json());
+      const mine = listed.flights.find((f: { id: string }) => f.id === flightId);
+      mine?.results?.conversions === 2
+        ? ok('the flight counts exactly its own conversions (2) — the stray tag is not absorbed')
+        : bad(`results: ${JSON.stringify(mine?.results)}`);
+      mine?.results?.revenueCents === 12000
+        ? ok('and its revenue ($120.00), from our snippet, not the platform grading itself')
+        : bad(`revenue: ${mine?.results?.revenueCents}`);
+      // The flight settled at 5150¢ above, so cost per result is exact.
+      mine?.results?.costPerResultCents === 2575 && mine?.results?.certainty === 'exact'
+        ? ok('cost per result is the settled invoice over measured results ($25.75, exact)')
+        : bad(`cpa: ${JSON.stringify(mine?.results)}`);
+
+      await db.conversion.deleteMany({ where: { organizationId: orgId, externalId: { startsWith: 'flight-conv-' } } });
 
       // Tenant scoping: a flight id is not probeable from outside its org.
       const anon = await fetch(`${BASE}/api/flights/${flightId}`, {
