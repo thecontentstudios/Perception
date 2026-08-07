@@ -19,6 +19,8 @@ import { renderEmail, renderSubject } from '../src/lib/senders/render';
 import { fillMergeFields } from '../src/lib/sms';
 import { findNameParts, guessMapping, parseCsv } from '../src/lib/csv';
 import { looksLikeEmail, normalizePhone } from '../src/lib/intake';
+import { effectiveOffset, isDaylightSaving, zoneForPhone } from '../src/lib/timezone';
+import { replyIntent, signTwilioRequest, verifyTwilioSignature } from '../src/lib/senders/twilio';
 import { ACCOUNTS, BRANDS, CONTACTS } from '../src/lib/demo-data';
 import type { Contact as ContactShape } from '../src/lib/types';
 
@@ -485,6 +487,66 @@ console.log('\n== Normalising what people type ==');
   !looksLikeEmail('a@b.co, c@d.co') ? ok('two addresses in one cell are rejected') : bad('accepted two addresses');
   !looksLikeEmail('John Smith') ? ok('a name in the email column is rejected') : bad('accepted a name');
   !looksLikeEmail('a@@b.co') ? ok('a double @ is rejected') : bad('accepted a double @');
+}
+
+console.log('\n== Where a number is, and how sure we are ==');
+{
+  eq(zoneForPhone('+19735550142').label, 'Eastern', 'a New Jersey code is Eastern');
+  eq(zoneForPhone('(415) 555-0100').label, 'Pacific', 'formatting does not stop the lookup');
+  eq(zoneForPhone('8085550100').label, 'Hawaii', 'a bare ten-digit number works');
+  eq(zoneForPhone('+19735550142').confidence, 'inferred', 'and it is only ever an inference');
+
+  // The direction the whole file leans: unknown means most restrictive, not
+  // most convenient. Getting this wrong permissively costs $500-$1,500 a
+  // message; getting it wrong restrictively costs a few hours.
+  const unknown = zoneForPhone('+442079460958');
+  eq(unknown.confidence, 'unknown', 'a non-US number is not guessed at');
+  eq(unknown.offsetHours, -10, 'and falls back to the latest US zone, not the earliest');
+  eq(zoneForPhone(null).offsetHours, -10, 'as does no number at all');
+
+  eq(isDaylightSaving(new Date('2026-07-04T12:00:00Z')), true, 'July is daylight saving');
+  eq(isDaylightSaving(new Date('2026-01-15T12:00:00Z')), false, 'January is not');
+  eq(effectiveOffset('+19735550142', new Date('2026-07-04T12:00:00Z')).offsetHours, -4, 'Eastern is -4 in summer');
+  eq(effectiveOffset('+19735550142', new Date('2026-01-15T12:00:00Z')).offsetHours, -5, 'and -5 in winter');
+}
+
+console.log('\n== What a text reply means ==');
+{
+  // The reserved words carriers mandate. Loose on punctuation and case.
+  for (const word of ['STOP', 'stop', 'Stop.', 'UNSUBSCRIBE', 'cancel', 'quit', 'end']) {
+    eq(replyIntent(word), 'stop', `"${word}" is an opt-out`);
+  }
+  eq(replyIntent('START'), 'start', '"START" asks to come back');
+  eq(replyIntent('HELP'), 'help', '"HELP" asks who we are');
+
+  // And strict on everything else — a booking request must not unsubscribe
+  // the customer who sent it.
+  eq(replyIntent('can you stop by tomorrow?'), 'other', 'a sentence containing "stop" is not an opt-out');
+  eq(replyIntent('yes please, Tuesday works'), 'other', 'a real reply is a real reply');
+  eq(replyIntent('stop it'), 'other', 'two words is not the keyword');
+}
+
+console.log('\n== Twilio signatures: consent is not a public API ==');
+{
+  const token = 'test-auth-token';
+  const url = 'https://example.test/api/webhooks/twilio/inbound';
+  const params = { From: '+15551234567', Body: 'STOP', MessageSid: 'SM123' };
+  const sig = signTwilioRequest(token, url, params);
+
+  verifyTwilioSignature(token, url, params, sig) ? ok('a correct signature verifies') : bad('valid signature rejected');
+  !verifyTwilioSignature(token, url, { ...params, Body: 'START' }, sig)
+    ? ok('changing a parameter invalidates it')
+    : bad('a tampered parameter verified');
+  !verifyTwilioSignature(token, url + '?x=1', params, sig) ? ok('so does changing the url') : bad('url not covered');
+  !verifyTwilioSignature('another-token', url, params, sig) ? ok('another token does not verify') : bad('wrong token verified');
+  !verifyTwilioSignature(token, url, params, null) ? ok('no signature, no verification') : bad('unsigned request verified');
+
+  // Twilio sorts parameters lexicographically before hashing. Getting that
+  // wrong means either every webhook is rejected, or the check gets skipped.
+  const reordered = { MessageSid: 'SM123', Body: 'STOP', From: '+15551234567' };
+  verifyTwilioSignature(token, url, reordered, sig)
+    ? ok('parameter order does not matter, because they are sorted')
+    : bad('signature depends on object key order');
 }
 
 console.log('\n== Allocating a total across messages ==');

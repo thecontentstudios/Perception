@@ -1,11 +1,13 @@
 import type { SendChannel, Sender } from './types';
 import { resendSender } from './resend';
+import { twilioSender } from './twilio';
 
 /**
  * Which sending services are actually wired up.
  *
- * Email goes through Resend when `RESEND_API_KEY` and `RESEND_FROM` are both
- * set; SMS has no implementation yet. Anything unconfigured returns `null`,
+ * Email goes through Resend when `RESEND_API_KEY` and `RESEND_FROM` are set;
+ * SMS through Twilio when its three variables are. Anything unconfigured
+ * returns `null`,
  * and `null` is a fact the rest of the system reads and acts on: the send path
  * holds its messages rather than claiming they went, and charges nothing.
  *
@@ -38,8 +40,24 @@ export function senderFor(channel: SendChannel): Sender | null {
     return resendSender({ apiKey, from, baseUrl: process.env.RESEND_BASE_URL });
   }
 
-  // SMS is Phase 10. Saying so beats an empty branch that reads as an
-  // oversight.
+  if (channel === 'sms') {
+    const accountSid = process.env.TWILIO_ACCOUNT_SID;
+    const authToken = process.env.TWILIO_AUTH_TOKEN;
+    const from = process.env.TWILIO_FROM;
+    // All three, or none. A partial configuration fails every message
+    // individually rather than declining to start, which turns a setup
+    // mistake into a queue of failures somebody has to unpick.
+    if (!accountSid || !authToken || !from) return null;
+    const appUrl = process.env.APP_URL ?? 'http://localhost:3000';
+    return twilioSender({
+      accountSid,
+      authToken,
+      from,
+      statusCallback: `${appUrl.replace(/\/+$/, '')}/api/webhooks/twilio/status`,
+      baseUrl: process.env.TWILIO_BASE_URL,
+    });
+  }
+
   return null;
 }
 
@@ -53,7 +71,7 @@ export function sendingStatus(channel: SendChannel): { ready: boolean; provider:
     why:
       channel === 'email'
         ? 'No email sending service is connected, so nothing will actually be delivered and nothing will be charged. Messages are held until one is. Set RESEND_API_KEY and RESEND_FROM to start sending.'
-        : 'Text messaging is not wired up yet, so nothing will be delivered and nothing will be charged. Messages are held.',
+        : 'No text messaging service is connected, so nothing will actually be delivered and nothing will be charged. Messages are held until one is. Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_FROM to start sending.',
   };
 }
 

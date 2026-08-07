@@ -21,7 +21,8 @@
     "test:worker": "tsx scripts/worker-test.ts",
     "test:media": "tsx scripts/media-test.ts",
     "test:security": "tsx scripts/security-test.ts",
-    "mock:resend": "node scripts/mock-resend.js"
+    "mock:resend": "node scripts/mock-resend.js",
+    "mock:twilio": "node scripts/mock-twilio.js"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",

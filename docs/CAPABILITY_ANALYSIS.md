@@ -15,13 +15,13 @@ to the cent. What has not kept pace is the part that touches the outside world.
 
 | Layer | Size | State |
 |---|---|---|
-| Domain model + engines (`src/lib`) | ~11,800 lines | Rich, tested, honest |
+| Domain model + engines (`src/lib`) | ~13,100 lines | Rich, tested, honest |
 | Screens (`src/app/**/page.tsx`) | ~6,200 lines | Complete |
-| Server surface (`src/app/api`) | ~2,500 lines | Real, authenticated, tenant-scoped |
+| Server surface (`src/app/api`) | ~3,650 lines | Real, authenticated, tenant-scoped |
 | Worker + queue | ~420 lines | Real; fires scheduled posts |
-| Tests | ~3,200 lines | 487 checks, five suites |
+| Tests | ~3,100 lines | 686 checks, five suites |
 | **Channels that can actually publish** | **2 of 18** | Bluesky, Mastodon |
-| **Channels that can actually send** | **1 of 2** | Email through Resend; SMS is Phase 10 |
+| **Channels that can actually send** | **2 of 2** | Email through Resend, SMS through Twilio |
 | **Ad platforms that can actually buy** | **0 of 11** | Priced, planned, never purchased |
 
 ## Verified: what is genuinely real
@@ -46,16 +46,22 @@ Each of these was checked against the code, not assumed.
 
 ## Verified: what is hollow
 
-### 1. `/api/send` does not send anything
+### 1. `/api/send` does not send anything — **fixed in Phases 7, 8 and 10**
 
-It computes the audience, prices it correctly, writes `EmailDelivery` or
-`SmsDelivery` rows at `QUEUED`, writes `SpendEntry` rows, and returns
-`{ ok: true, queued: 1110 }`. **No provider is ever called.** No code anywhere
-advances a delivery past `QUEUED`. There is no Resend, SES, Postmark or Twilio
+It computed the audience, priced it correctly, wrote `EmailDelivery` or
+`SmsDelivery` rows at `QUEUED`, wrote `SpendEntry` rows, and returned
+`{ ok: true, queued: 1110 }`. **No provider was ever called.** No code anywhere
+advanced a delivery past `QUEUED`. There was no Resend, SES, Postmark or Twilio
 client in the repository.
 
-The composer reports *"Queued for 1,110 people — free charged."* Nothing was
-queued anywhere but our own table, and nothing will ever pick it up.
+The composer reported *"Queued for 1,110 people — free charged."* Nothing was
+queued anywhere but our own table, and nothing would ever pick it up.
+
+Now: Phase 7 moved the charge to after the provider accepts, so a ledger row
+means a provider took the message; Phase 8 made email real through Resend, with
+bounces, complaints and a suppression list; Phase 10 made SMS real through
+Twilio, with STOP honoured and the segment count reconciled against the
+carrier's.
 
 ### 2. Nothing in the product creates a contact — **fixed in Phase 9**
 
@@ -209,23 +215,30 @@ subscribed and the reachable audience grows by exactly one. A CSV import
 previews before writing, refuses `SUBSCRIBED` without a stated basis, and a
 website quote request now becomes a pending contact instead of being discarded.
 
-### Phase 10 — Text messages that actually arrive
+### Phase 10 — Text messages that actually arrive — **done**
 
-1. Twilio adapter behind the same `Sender` interface.
-2. **STOP / HELP / START inbound handling**, mapped to consent state. This is
-   legally required and is the single highest-risk gap in the SMS path: we
-   collect the consent state and enforce it, but nothing can currently change
-   it in response to a reply.
-3. Delivery receipts → delivery status; per-segment cost reconciled against
-   Twilio's reported segment count, which is the check that proves `sms.ts` right.
-4. **Quiet hours enforced at fire time**, per recipient, by the worker — the
-   composer's check is for the hour the owner picked, and a scheduled send lands
-   at a different one.
+1. Twilio adapter behind the same `Sender` interface — the first time that
+   interface has been asked to hold two genuinely different providers.
+2. **STOP / HELP / START inbound handling**, mapped to consent state. This was
+   legally required and the single highest-risk gap in the SMS path: the product
+   collected the consent state and enforced it, and nothing could change it in
+   response to a reply.
+3. Delivery receipts → delivery status, with only the permanent error codes
+   suppressing. Per-segment cost reconciled against Twilio's reported segment
+   count — which is what proved `sms.ts` right and the dispatcher wrong.
+4. **Quiet hours enforced at fire time**, per recipient, from an area-code time
+   zone inference that holds unknown numbers to the most restrictive US window.
 
-**Acceptance:** a text arrives; replying STOP flips consent to unsubscribed
-within one polling interval; the next send excludes that contact and the
-projection drops by exactly one recipient's cost; our segment count matches the
-provider's for a message containing an emoji.
+**Acceptance — met.** A text goes out through a real HTTP round trip to an
+adapter that reports the carrier's own segment count; replying STOP flips
+consent to unsubscribed, suppresses the number, and writes a `ConsentRecord`
+quoting what was typed; the next send excludes that contact and the projection
+drops by exactly that recipient's cost; our segment count matches the provider's
+for a message containing an emoji, and a mismatch is recorded as a fault rather
+than silently adopting the carrier's number.
+
+The reconciliation earned its place immediately: it caught that SMS was being
+priced with merge fields and an opt-out line filled in, and sent with neither.
 
 ### Phase 11 — Real numbers in the reporting
 

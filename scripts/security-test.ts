@@ -16,6 +16,8 @@ import { hashPassword, verifyPassword, passwordProblem, needsRehash } from '../s
 import { __installSender, __resetSenders } from '../src/lib/senders/registry';
 import { dispatch } from '../src/lib/queue/dispatch';
 import { resendSender } from '../src/lib/senders/resend';
+import { twilioSender } from '../src/lib/senders/twilio';
+import { effectiveOffset } from '../src/lib/timezone';
 import { recordCharge } from '../src/lib/billing';
 
 const BASE = process.env.BASE_URL || 'http://localhost:3000';
@@ -305,7 +307,12 @@ async function main() {
 
       try {
         const first = await dispatch('email', { limit: 10_000 });
-        const charges = await db.spendEntry.count({ where: { organizationId: orgId, kind: 'message' } });
+        // Counted by the stub's own reference prefix, not by "every message
+        // row in the org". A worker left running by another suite dispatches
+        // whatever is queued and writes charges of its own, and an assertion
+        // that counts those is an assertion about the order the suites ran in.
+        const ours = { organizationId: orgId, kind: 'message', providerRef: { startsWith: 'test-' } };
+        const charges = await db.spendEntry.count({ where: ours });
         const stillQueued = await db.emailDelivery.count({
           where: { status: 'QUEUED', contact: { organizationId: orgId } },
         });
@@ -336,7 +343,7 @@ async function main() {
             })
           )
         );
-        const afterReplay = await db.spendEntry.count({ where: { organizationId: orgId, kind: 'message' } });
+        const afterReplay = await db.spendEntry.count({ where: ours });
         replayed.every((r) => r === 'already-recorded')
           ? ok('a replayed confirmation reports already-recorded')
           : bad(`replay outcomes: ${replayed.join(', ')}`);
@@ -351,7 +358,7 @@ async function main() {
         // 1,110 ledger rows adding to zero — not zero rows. The distinction
         // matters: the rows are what deplete the allowance.
         const after = await spendView();
-        const rowsNow = await db.spendEntry.count({ where: { organizationId: orgId, kind: 'message' } });
+        const rowsNow = await db.spendEntry.count({ where: ours });
         after.committedCents === 0 && after.committedMessages === 0
           ? ok('/spend reports nothing left committed once everything is sent')
           : bad(`after dispatch: ${after.committedMessages} still committed`);
@@ -376,6 +383,7 @@ async function main() {
         const before = await db.spendEntry.count({ where: { organizationId: orgId, kind: 'message' } });
         const r = await dispatch('email', { limit: 10_000 });
         const afterCount = await db.spendEntry.count({ where: { organizationId: orgId, kind: 'message' } });
+        void before;
         r.failed > 0 && r.sent === 0
           ? ok('a success with no message id is failed, not charged')
           : bad(`unreferenced success: sent ${r.sent}, failed ${r.failed}`);
@@ -1118,6 +1126,292 @@ async function main() {
       await db.confirmationToken.deleteMany({ where: { contactId: { in: ids } } });
       await db.contact.deleteMany({ where: { id: { in: ids } } });
       await db.signupForm.deleteMany({ where: { slug } });
+    }
+  }
+
+  console.log('\n== Texts that arrive, and STOP that is honoured ==');
+  {
+    const MOCK = process.env.TWILIO_BASE_URL || 'http://localhost:4324';
+    const mockUp = await fetch(`${MOCK}/__messages`).then((r) => r.ok).catch(() => false);
+    const user = await db.user.findFirst({ where: { passwordHash: { not: null } } });
+
+    if (!mockUp && process.env.TWILIO_BASE_URL) {
+      bad('TWILIO_BASE_URL is set but the mock is not reachable — run `npm run mock:twilio`');
+    } else if (!mockUp || !user) {
+      console.log(`  SKIP ${!mockUp ? 'no mock Twilio' : 'no seeded user'}`);
+    } else {
+      await fetch(`${MOCK}/__reset`, { method: 'POST' });
+      const login = await fetch(`${BASE}/api/auth/login`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: user.email, password: process.env.SEED_PASSWORD || 'demo-password-change-me' }),
+      });
+      const cookie = login.headers.get('set-cookie')?.split(';')[0] ?? '';
+      const auth = { cookie, 'content-type': 'application/json' };
+      const orgId = (await db.membership.findFirst({ where: { userId: user.id } }))?.organizationId ?? '';
+      const stamp = Date.now();
+
+      let sid: string | null = null;
+      let contactId: string | null = null;
+
+      const wipe = async () => {
+        await db.smsDelivery.deleteMany({ where: { variationId: { startsWith: 'adhoc:' } } });
+        await db.spendEntry.deleteMany({ where: { organizationId: orgId } });
+        await db.suppression.deleteMany({ where: { organizationId: orgId, channel: 'SMS' } });
+        await db.messageBatch.deleteMany({ where: { organizationId: orgId } });
+      };
+      await wipe();
+
+      // An SMS account in CONNECTED state, because Phase 5 blocks a text
+      // until 10DLC registration is paid for and a connected account is how
+      // that is represented. The seed ships one in another state, which is why
+      // this updates rather than only creating.
+      const existing = await db.connectedAccount.findFirst({ where: { organizationId: orgId, channel: 'SMS' } });
+      // Remembered so it can be put back. Leaving it CONNECTED leaked into the
+      // Phase 7 section on the next run, where "an unregistered SMS send is
+      // refused" started passing through a world that was registered — a test
+      // that mutates shared state and does not restore it makes a later test
+      // assert nothing.
+      const originalSmsStatus = existing?.status ?? null;
+      let createdSmsAccount: string | null = null;
+      if (existing) {
+        await db.connectedAccount.update({ where: { id: existing.id }, data: { status: 'CONNECTED' } });
+      } else {
+        const made = await db.connectedAccount.create({
+          data: {
+            organizationId: orgId, channel: 'SMS', displayName: 'Twilio (test)',
+            destinationKind: 'sending number', status: 'CONNECTED', scopes: [],
+          },
+        });
+        createdSmsAccount = made.id;
+      }
+
+      // Two contacts, deliberately in different time zones: one where it is
+      // currently daytime and one where it is not. Quiet hours are the
+      // recipient's, so the same dispatch must do different things with them.
+      const nowH = new Date().getUTCHours();
+      const localAt = (offset: number) => (((nowH + offset) % 24) + 24) % 24;
+      const ZONES: { npa: string; offset: number }[] = [
+        { npa: '212', offset: -4 }, // Eastern (DST)
+        { npa: '312', offset: -5 }, // Central
+        { npa: '303', offset: -6 }, // Mountain
+        { npa: '415', offset: -7 }, // Pacific
+        { npa: '808', offset: -10 }, // Hawaii
+      ];
+      const daytime = ZONES.find((z) => localAt(z.offset) >= 9 && localAt(z.offset) < 20);
+      const nighttime = ZONES.find((z) => localAt(z.offset) < 9 || localAt(z.offset) >= 20);
+
+      if (!daytime) {
+        console.log('  SKIP no US time zone is inside sending hours right now');
+      } else {
+        const phone = `+1${daytime.npa}555${String(stamp).slice(-4)}`;
+        const contact = await db.contact.create({
+          data: {
+            organizationId: orgId, name: 'Tess Kerr', email: `tess-${stamp}@example.com`, phone,
+            emailConsent: 'SUBSCRIBED', smsConsent: 'SUBSCRIBED', source: 'phase 10 test',
+          },
+        });
+
+        const queued = await fetch(`${BASE}/api/send`, {
+          method: 'POST', headers: auth,
+          body: JSON.stringify({ channel: 'sms', body: 'Three slots left this week. Book at the shop.', contactIds: [contact.id] }),
+        }).then((r) => r.json());
+        queued.ok ? ok(`queued a text for a ${daytime.npa} number`) : bad(`sms send refused: ${queued.reason}`);
+
+        __installSender('sms', twilioSender({
+          accountSid: process.env.MOCK_TWILIO_SID || 'ACmock00000000000000000000000000',
+          authToken: process.env.MOCK_TWILIO_TOKEN || 'mock-twilio-auth-token',
+          from: '+15550001111',
+          statusCallback: `${BASE}/api/webhooks/twilio/status`,
+          baseUrl: MOCK,
+        }));
+
+        try {
+          const run = await dispatch('sms', { limit: 50 });
+          run.sent === 1
+            ? ok(`it left through the adapter — ${localAt(daytime.offset)}:00 where they are`)
+            : bad(`sent ${run.sent}, failed ${run.failed}, deferred ${run.deferred}`);
+
+          const { messages } = await fetch(`${MOCK}/__messages`).then((r) => r.json());
+          messages.length >= 1 ? ok(`the carrier received it`) : bad('nothing reached the carrier');
+          sid = messages[0]?.sid ?? null;
+          messages[0]?.idempotencyKey ? ok('carrying an idempotency token') : bad('no idempotency token');
+          /Reply STOP to opt out/.test(messages[0]?.body ?? '')
+            ? ok('and the opt-out language carriers require')
+            : bad(`body was: ${messages[0]?.body}`);
+          messages[0]?.statusCallback
+            ? ok('and a callback so we hear what happened to it')
+            : bad('no status callback configured');
+
+          // The reconciliation this phase exists to make possible: sms.ts has
+          // counted segments since Phase 5 with nothing to contradict it.
+          const delivery = await db.smsDelivery.findFirst({ where: { providerRef: sid ?? undefined } });
+          delivery?.segments === Number(messages[0]?.num_segments)
+            ? ok(`our segment count matches the carrier's (${delivery?.segments})`)
+            : bad(`we said ${delivery?.segments}, the carrier billed ${messages[0]?.num_segments}`);
+          run.segmentMismatches === 0 ? ok('with no mismatches recorded') : bad(`${run.segmentMismatches} mismatches`);
+
+          // And on a message with an emoji, where a naive counter falls over:
+          // one emoji drops the segment size from 160 to 70.
+          const emojiBody = 'a'.repeat(90) + ' \u{1F600} book with us today at the shop';
+          const emojiSend = await fetch(`${BASE}/api/send`, {
+            method: 'POST', headers: auth,
+            body: JSON.stringify({ channel: 'sms', body: emojiBody, contactIds: [contact.id] }),
+          }).then((r) => r.json());
+          if (!emojiSend.ok) bad(`emoji send refused: ${emojiSend.reason}`);
+          else {
+            const emojiRun = await dispatch('sms', { limit: 50 });
+            const after = await fetch(`${MOCK}/__messages`).then((r) => r.json());
+            const last = after.messages.at(-1);
+            const emojiDelivery = await db.smsDelivery.findFirst({ where: { providerRef: last?.sid } });
+            emojiDelivery?.encoding === 'UCS-2' ? ok('an emoji forces UCS-2, as modelled') : bad(`encoding: ${emojiDelivery?.encoding}`);
+            emojiDelivery?.segments === Number(last?.num_segments) && emojiRun.segmentMismatches === 0
+              ? ok(`and the counts still agree (${emojiDelivery?.segments} segments)`)
+              : bad(`emoji mismatch: we said ${emojiDelivery?.segments}, carrier billed ${last?.num_segments}`);
+          }
+        } finally {
+          __resetSenders();
+        }
+
+        // ---- quiet hours, per recipient ----
+        if (nighttime) {
+          const nightContact = await db.contact.create({
+            data: {
+              organizationId: orgId, name: 'Nox Vale', email: `nox-${stamp}@example.com`,
+              phone: `+1${nighttime.npa}555${String(stamp).slice(-4)}`,
+              emailConsent: 'SUBSCRIBED', smsConsent: 'SUBSCRIBED', source: 'phase 10 test',
+            },
+          });
+          const nightQueued = await fetch(`${BASE}/api/send`, {
+            method: 'POST', headers: auth,
+            body: JSON.stringify({ channel: 'sms', body: 'Late night offer', contactIds: [nightContact.id] }),
+          }).then((r) => r.json());
+          if (nightQueued.ok) {
+            __installSender('sms', twilioSender({
+              accountSid: process.env.MOCK_TWILIO_SID || 'ACmock00000000000000000000000000',
+              authToken: process.env.MOCK_TWILIO_TOKEN || 'mock-twilio-auth-token',
+              from: '+15550001111', statusCallback: `${BASE}/api/webhooks/twilio/status`, baseUrl: MOCK,
+            }));
+            try {
+              const nightRun = await dispatch('sms', { limit: 50 });
+              nightRun.deferred >= 1 && nightRun.sent === 0
+                ? ok(`a ${nighttime.npa} number is held — ${localAt(nighttime.offset)}:00 is outside their window`)
+                : bad(`night send: ${nightRun.sent} sent, ${nightRun.deferred} deferred`);
+              (await db.smsDelivery.findFirst({ where: { contactId: nightContact.id } }))?.status === 'QUEUED'
+                ? ok('and left queued rather than failed, so it goes out in the morning')
+                : bad('a deferred message was not left queued');
+            } finally {
+              __resetSenders();
+            }
+          }
+          await db.smsDelivery.deleteMany({ where: { contactId: nightContact.id } });
+          await db.contact.delete({ where: { id: nightContact.id } }).catch(() => {});
+        } else {
+          console.log('  NOTE every US zone is inside sending hours right now; quiet-hours deferral not exercised');
+        }
+
+        contactId = contact.id;
+      }
+
+      // ---- delivery receipts ----
+      if (sid) {
+        const hook = (body: unknown) =>
+          fetch(`${MOCK}/__status`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+            .then((r) => r.json());
+
+        const forged = await hook({ sid, status: 'delivered', badSignature: true });
+        forged.appStatus === 401 ? ok('an unsigned delivery receipt is refused') : bad(`forged receipt: ${forged.appStatus}`);
+
+        const delivered = await hook({ sid, status: 'delivered' });
+        delivered.appStatus === 200 ? ok('a signed one is accepted') : bad(`signed receipt: ${delivered.appStatus}`);
+        (await db.smsDelivery.findFirst({ where: { providerRef: sid } }))?.status === 'DELIVERED'
+          ? ok('and the message is marked delivered')
+          : bad('delivery status did not advance');
+
+        // A handset that is switched off is not a dead number.
+        const soft = await db.smsDelivery.findFirst({
+          where: { contactId: contactId ?? undefined, providerRef: { not: sid } },
+        });
+        if (soft?.providerRef) {
+          await hook({ sid: soft.providerRef, status: 'undelivered', code: 30004 });
+          (await db.suppression.count({ where: { organizationId: orgId, channel: 'SMS' } })) === 0
+            ? ok('a temporary failure does not suppress the number')
+            : bad('a soft failure suppressed a number');
+        }
+      }
+
+      // ---- STOP, the thing that could not happen before ----
+      if (!contactId) {
+        console.log('  SKIP no contact to exercise STOP against');
+      } else {
+      const currentPhone = (await db.contact.findUnique({ where: { id: contactId } }))!.phone!;
+      const inbound = (body: unknown) =>
+        fetch(`${MOCK}/__inbound`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+          .then((r) => r.json());
+
+      const forgedStop = await inbound({ from: currentPhone, body: 'STOP', badSignature: true });
+      forgedStop.appStatus === 401 ? ok('a forged STOP is refused') : bad(`forged stop: ${forgedStop.appStatus}`);
+      (await db.contact.findUnique({ where: { id: contactId } }))?.smsConsent === 'SUBSCRIBED'
+        ? ok('and changes nobody\u2019s consent')
+        : bad('a forged webhook changed consent');
+
+      // A message that merely contains the word is not an opt-out.
+      await inbound({ from: currentPhone, body: 'can you stop by the shop tomorrow?' });
+      (await db.contact.findUnique({ where: { id: contactId } }))?.smsConsent === 'SUBSCRIBED'
+        ? ok('"can you stop by tomorrow?" is not an opt-out')
+        : bad('a booking request unsubscribed a customer');
+      (await db.conversation.count({ where: { organizationId: orgId, kind: 'sms_reply', status: 'open' } })) > 0
+        ? ok('and lands in the inbox, because it is the result the campaign was for')
+        : bad('a real reply was swallowed');
+
+      const stopped = await inbound({ from: currentPhone, body: 'Stop.' });
+      stopped.appStatus === 200 ? ok('a signed STOP is accepted') : bad(`stop returned ${stopped.appStatus}`);
+      const afterStop = await db.contact.findUnique({ where: { id: contactId } });
+      afterStop?.smsConsent === 'UNSUBSCRIBED' ? ok('and flips consent to unsubscribed') : bad(`after STOP: ${afterStop?.smsConsent}`);
+      (await db.suppression.count({ where: { organizationId: orgId, channel: 'SMS' } })) >= 1
+        ? ok('and suppresses the number')
+        : bad('STOP did not suppress');
+      (await db.consentRecord.count({ where: { contactId, channel: 'SMS', state: 'UNSUBSCRIBED' } })) >= 1
+        ? ok('with the exact words they sent, as evidence')
+        : bad('no consent record for the opt-out');
+
+      // The audience shrinks, and so does the quote.
+      const afterQuote = await fetch(`${BASE}/api/send`, {
+        method: 'POST', headers: auth,
+        body: JSON.stringify({ channel: 'sms', body: 'Another offer', contactIds: [contactId], dryRun: true }),
+      }).then((r) => r.json());
+      afterQuote.reach.reachable === 0
+        ? ok('the next send excludes them entirely')
+        : bad(`still reachable after STOP: ${afterQuote.reach.reachable}`);
+
+      // START comes back as pending, not subscribed: withdrawn consent is not
+      // restored by a single word.
+      await inbound({ from: currentPhone, body: 'START' });
+      (await db.contact.findUnique({ where: { id: contactId } }))?.smsConsent === 'PENDING'
+        ? ok('START re-opens the door but does not walk through it — pending, not subscribed')
+        : bad('START restored full consent from one word');
+
+      // HELP is answered, because carriers require an answer.
+      const helped = await inbound({ from: currentPhone, body: 'HELP' });
+      /Reply STOP to opt out/.test(helped.appBody ?? '')
+        ? ok('HELP gets the reply carriers mandate')
+        : bad(`help replied: ${helped.appBody}`);
+
+      }
+
+      // Cleanup, including the account status this section changed.
+      if (existing && originalSmsStatus) {
+        await db.connectedAccount.update({ where: { id: existing.id }, data: { status: originalSmsStatus } });
+      }
+      if (createdSmsAccount) {
+        await db.connectedAccount.delete({ where: { id: createdSmsAccount } }).catch(() => {});
+      }
+      await db.conversation.deleteMany({ where: { organizationId: orgId, kind: 'sms_reply' } });
+      if (contactId) {
+        await db.consentRecord.deleteMany({ where: { contactId } });
+        await db.smsDelivery.deleteMany({ where: { contactId } });
+        await db.contact.delete({ where: { id: contactId } }).catch(() => {});
+      }
+      await wipe();
     }
   }
 

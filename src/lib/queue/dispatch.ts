@@ -1,8 +1,10 @@
 import { db } from '../db';
 import { recordCharge } from '../billing';
 import { senderFor } from '../senders/registry';
-import { renderEmail, renderSubject } from '../senders/render';
+import { renderEmail, renderSms, renderSubject } from '../senders/render';
 import { isSuppressed } from '../suppression';
+import { checkQuietHours, previewSms } from '../sms';
+import { effectiveOffset } from '../timezone';
 import type { OutboundMessage, SendChannel } from '../senders/types';
 
 /**
@@ -29,6 +31,10 @@ export interface DispatchResult {
   failed: number;
   /** Dropped because the address is on the suppression list. */
   suppressed: number;
+  /** Left for later because it is the middle of the night where they are. */
+  deferred: number;
+  /** Messages where our segment count and the carrier's disagreed. */
+  segmentMismatches: number;
   /** Left alone because nothing can send them yet. */
   held: number;
   chargedCents: number;
@@ -62,6 +68,8 @@ export async function dispatch(channel: SendChannel, opts: { limit?: number } = 
     sent: 0,
     failed: 0,
     suppressed: 0,
+    deferred: 0,
+    segmentMismatches: 0,
     held: 0,
     chargedCents: 0,
     note: null,
@@ -112,21 +120,51 @@ export async function dispatch(channel: SendChannel, opts: { limit?: number } = 
       continue;
     }
 
+    // Quiet hours, checked **here** rather than only in the composer.
+    //
+    // The composer checks the hour the owner picked, which is the right thing
+    // to show them and the wrong thing to rely on: a campaign queued at 4pm
+    // for "tomorrow morning" fires at whatever time the worker gets to it, and
+    // a backlog that drains at 2am would text a thousand people at 2am.
+    //
+    // It is also per recipient. The window is the *recipient's*, so a list
+    // spanning four time zones is legal for some of it and not for the rest at
+    // any given moment — one check for the whole batch is the wrong shape.
+    if (channel === 'sms') {
+      const now = new Date();
+      const zone = effectiveOffset(to, now);
+      const verdict = checkQuietHours(now, zone.offsetHours);
+      if (!verdict.allowed) {
+        // Left QUEUED, not failed. It becomes sendable on its own a few hours
+        // from now, and failing it would make a legal safeguard look like a
+        // delivery problem.
+        result.deferred += 1;
+        continue;
+      }
+    }
+
     const ctx = {
       businessName: row.batch.fromName ?? 'us',
       unsubscribeBase: appUrl,
       linkUrl: row.batch.linkUrl ?? undefined,
     };
     const recipient = { name: row.contact.name, email: to, deliveryId: row.id };
-    const rendered = renderEmail(row.batch, recipient, ctx);
+
+    // Both channels render merge fields; only SMS goes through `previewSms`,
+    // which appends the opt-out line. That append has to happen here as well
+    // as in the composer, because the composer's version is what set the
+    // price — sending the shorter text would mean charging for segments we
+    // did not use and omitting language carriers require.
+    const emailRendered = channel === 'email' ? renderEmail(row.batch, recipient, ctx) : null;
+    const smsBody = channel === 'sms' ? previewSms(renderSms(row.batch, recipient, ctx)).fullText : null;
 
     const message: OutboundMessage = {
       deliveryId: row.id,
       to,
       subject: renderSubject(row.batch.subject, recipient, ctx),
-      body: channel === 'email' ? rendered.text : row.batch.body,
-      html: channel === 'email' ? rendered.html : undefined,
-      unsubscribeUrl: rendered.unsubscribeUrl,
+      body: emailRendered ? emailRendered.text : smsBody!,
+      html: emailRendered?.html,
+      unsubscribeUrl: emailRendered?.unsubscribeUrl,
       costCents: row.costCents,
       segments: 'segments' in row ? (row as { segments: number }).segments : undefined,
     };
@@ -173,14 +211,33 @@ export async function dispatch(channel: SendChannel, opts: { limit?: number } = 
       data: { status: 'SENT', providerRef, sentAt: new Date() },
     });
 
+    // What we counted, against what the carrier billed.
+    //
+    // `sms.ts` has computed segments since Phase 5 with nothing to check it
+    // against. Twilio reports its own count, so a disagreement is finally
+    // visible — and it is recorded on the row rather than silently adopted,
+    // because if the two differ one of them is a bug and quietly taking the
+    // provider's number would hide it.
+    const ourUnits = 'segments' in row ? (row as { segments: number }).segments : 1;
+    const billed = outcome.billedUnits;
+    const mismatch = channel === 'sms' && billed !== undefined && billed !== ourUnits;
+
+    if (mismatch) {
+      await db.smsDelivery.update({
+        where: { id: row.id },
+        data: { failReason: `Segment count disagreed: we said ${ourUnits}, ${sender.name} billed ${billed}.` },
+      });
+      result.segmentMismatches += 1;
+    }
+
     const charged = await recordCharge({
       organizationId: row.contact.organizationId,
       brandId: row.contact.brandId,
       channel,
       providerRef,
       cents: row.costCents,
-      units: 'segments' in row ? (row as { segments: number }).segments : 1,
-      note: `${sender.name} · ${to}`,
+      units: ourUnits,
+      note: `${sender.name} · ${to}${mismatch ? ` (billed ${billed} segments)` : ''}`,
     });
 
     result.sent += 1;

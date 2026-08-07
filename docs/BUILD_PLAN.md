@@ -1150,3 +1150,143 @@ asserts the earlier link is dead.
 **The worker suite was passing by skipping**, again: mock Mastodon had died
 between runs, so it reported success having run nothing. Counted per suite
 rather than trusting the aggregate.
+
+---
+
+## Phase 10 — Text messages that actually arrive
+
+The other half of the capability audit's ledger finding. Phase 7 stopped the
+product charging for messages nobody sent; Phase 8 made email real. SMS was
+left priced to the cent, projected, quiet-hours checked, segment counted — and
+never sent. `/api/send` handed an SMS batch to a registry that had no SMS
+sender in it, and the honest refusal that produced was the best outcome
+available, because the alternative was worse: the product records SMS consent
+and enforces it at send time, and **nothing could change it.**
+
+That is the part that made this the highest-risk gap rather than merely a
+missing adapter. A customer who replied STOP stayed marked subscribed for ever.
+The carrier stops delivering after STOP whether or not our database noticed, so
+the failure is quiet in the worst way — messages keep being sent, keep being
+billed, keep not arriving, and the reachable count on screen says everything is
+fine.
+
+### 10.1 — The adapter (`src/lib/senders/twilio.ts`)
+
+The second implementation of the `Sender` contract, which is the first time the
+interface has been asked to hold two genuinely different providers. It held.
+Form-encoded rather than JSON, Basic auth rather than a bearer token, numeric
+error codes rather than strings — all of it fits behind `send(message)` without
+the interface learning what Twilio is.
+
+Two things are carried through that the interface did not have before:
+
+**`billedUnits`.** Twilio replies with `num_segments` — the number the carrier
+will actually charge for. `sms.ts` has computed that number since Phase 5 with
+nothing in the world to contradict it. The adapter reports the provider's count
+*beside* our own rather than in place of it, because the point is to compare
+them.
+
+**Idempotency.** `i-twilio-idempotency-token: deliveryId`, the same discipline
+as Resend's key. A crash between the provider accepting a message and us
+recording its reference must not put a second copy on somebody's phone, where a
+duplicate is more intrusive than it is in a mailbox.
+
+### 10.2 — Replies change consent (`/api/webhooks/twilio/inbound`)
+
+STOP, START and HELP are not features. US carriers mandate them and a sender
+who ignores them loses their registration.
+
+- **STOP** → `UNSUBSCRIBED`, suppressed, and a `ConsentRecord` quoting what the
+  person actually typed.
+- **START** → `PENDING`, *not* `SUBSCRIBED`. Somebody texting START is asking
+  for messages again and honouring it is right, but the original consent was
+  withdrawn and one word does not restore the evidence for it.
+- **HELP** → an answer naming the business, because carriers require one and
+  Twilio's default is generic.
+- **Everything else** → the inbox. A "yes please, Tuesday works" is the reason
+  the campaign was sent, and a product that swallows replies because they were
+  not keywords has thrown away the result.
+
+Matching is loose on punctuation and case and strict on everything else. `STOP`
+and `stop.` are one intent; `stop by the shop tomorrow` is not, and treating it
+as one unsubscribes a customer who was trying to book.
+
+Replies are matched by number across **every** organization the number appears
+in. One person can be a customer of two businesses in the same workspace, and a
+STOP means stop — resolving it to a single tenant leaves the other one texting
+them.
+
+The signature check matters more here than on any other endpoint in the
+product, because this endpoint changes consent. A forged STOP unsubscribes a
+customer; a forged START re-subscribes somebody who opted out, which is the
+direction that produces a complaint. Twilio signs HMAC-SHA1 over the request URL
+followed by every parameter as `key + value` in lexicographic order by key.
+
+### 10.3 — Delivery receipts, and the fact that a text has no bounce
+
+Email tells you a mailbox is dead. A text comes back `failed` or `undelivered`
+with a numeric code, and only some of those codes mean the number is finished.
+30003 is a handset that is switched off. 30005 is a number that does not exist.
+Treating them alike either suppresses people whose phone was in a drawer or
+keeps paying to text disconnected lines for ever.
+
+So only the permanent codes suppress, and 21610 — the carrier reporting an
+opt-out through a route we never saw — additionally flips consent, because that
+one is a consent fact and not just a delivery one.
+
+### 10.4 — Quiet hours at fire time, per recipient (`src/lib/timezone.ts`)
+
+`sms.ts` has modelled the TCPA's 8am–9pm window since Phase 5 and has been fed a
+hardcoded `-7` the whole time — every quiet-hours check in the product was
+answering the question for somebody in California. And the composer checks the
+hour the *owner* picked, while a scheduled send lands at a different one.
+
+Both are fixed by checking per recipient, in the dispatcher, at the moment the
+message would go out. The zone is a guess: an area code says where a number was
+*issued*, and portability means a third of Americans carry a code from
+somewhere they no longer live. So the guess carries a confidence, and an
+unknown number is held to Hawaii — the last place in the country where it is
+still early. That delays some messages by a few hours and cannot produce a
+violation. The reverse default, Eastern, sends at 6am Pacific.
+
+The asymmetry is deliberate throughout the file. Wrong in the permissive
+direction costs $500–$1,500 per message; wrong in the restrictive direction
+costs a wait.
+
+### 10.5 — A stand-in Twilio (`scripts/mock-twilio.js`)
+
+Real Twilio needs an account, a registered 10DLC campaign, a rented number, and
+sends every test message to a real handset. The stand-in speaks the same wire
+protocol — Basic auth, form-encoded bodies, the `{ sid, num_segments }` shape
+the adapter parses, the error codes it classifies — so what is under test is the
+real adapter taking a real HTTP round trip.
+
+It counts segments **itself**, from the GSM-7 rules, deliberately not importing
+`sms.ts`. A stand-in that imported the implementation it exists to check would
+agree with it by construction and prove nothing.
+
+### What the tests caught
+
+**SMS was priced with merge fields and an opt-out line, and sent without
+either.** The dispatcher passed `row.batch.body` to the sender raw — so a
+recipient would have received a message containing a literal `{{name}}` and no
+way to stop, while the ledger charged for the rendered length. It surfaced
+because the segment-count reconciliation disagreed with the carrier: we said 3,
+Twilio billed 2. Fixed by rendering through `renderSms` and pricing the exact
+string that goes out. The check that found it existed only because the adapter
+reports the provider's count alongside our own instead of adopting it.
+
+**A test that passed because another test had already succeeded.** Phase 10
+leaves the SMS `ConnectedAccount` connected, which made Phase 7's "an
+unregistered SMS channel is refused" pass without exercising anything. The
+suite now captures the original status and restores it.
+
+**A ledger assertion that counted other suites' work.** "1310 ledger rows for
+1110 sends" — correct, and not a bug: a worker left running by another suite
+dispatches what is queued and writes charges of its own. An assertion that
+counts those is an assertion about the order the suites ran in. Scoped to the
+stub's own provider references.
+
+**The seed's SMS account existed in a non-connected state**, so the setup's
+`findFirst` for a connected one found nothing and created a duplicate. Changed
+to update-or-create.

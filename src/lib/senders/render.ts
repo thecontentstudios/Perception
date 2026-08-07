@@ -92,6 +92,30 @@ export function renderSubject(subject: string | null, to: Recipient, ctx: Render
   });
 }
 
+/**
+ * The text of a message as it will actually leave.
+ *
+ * SMS went out as `batch.body` verbatim for one release: merge fields
+ * unfilled, so recipients would have been greeted as `Hi {{name}}`, and
+ * without the opt-out line — which is required by carriers and, worse, was
+ * *already included in the price*. The composer counted segments with
+ * "Reply STOP to opt out." appended and the dispatcher sent the message
+ * without it, so we charged for three segments and delivered two.
+ *
+ * The segment-count reconciliation added in the same phase is what found it:
+ * our number and the carrier's disagreed on the first message containing an
+ * emoji, and the disagreement was this.
+ */
+export function renderSms(batch: { body: string }, to: Recipient, ctx: RenderContext): string {
+  const first = to.name.trim().split(/\s+/)[0] ?? '';
+  return fillMergeFields(stripUnknownTokens(batch.body), {
+    name: first,
+    full_name: to.name,
+    business: ctx.businessName,
+    link: ctx.linkUrl ?? '',
+  });
+}
+
 const ESCAPES: Record<string, string> = {
   '&': '&amp;',
   '<': '&lt;',
