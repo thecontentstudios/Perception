@@ -1202,7 +1202,6 @@ async function main() {
       // fails only at the hours of day where the two disagree.
       const { QUIET_HOURS } = await import('../src/lib/sms');
       const daytime = ZONES.find((z) => localAt(z.offset) >= QUIET_HOURS.openHour && localAt(z.offset) < QUIET_HOURS.closeHour);
-      const nighttime = ZONES.find((z) => localAt(z.offset) < QUIET_HOURS.openHour || localAt(z.offset) >= QUIET_HOURS.closeHour);
 
       if (!daytime) {
         console.log('  SKIP no US time zone is inside sending hours right now');
@@ -1276,41 +1275,86 @@ async function main() {
           __resetSenders();
         }
 
-        // ---- quiet hours, per recipient ----
-        if (nighttime) {
+        // ---- quiet hours, deterministically ----
+        //
+        // This section used to hunt for a US zone that was currently asleep
+        // and skip when none was — which meant the deferral path was only
+        // exercised during US night, and silently not at all after the
+        // composer (correctly) started refusing all-asleep lists. A check
+        // that can only run while its author is asleep is a check that
+        // mostly doesn't run. Both layers take an injectable clock now, so
+        // the test picks the hour instead of waiting for it.
+        {
+          const today = new Date().toISOString().slice(0, 10);
+          const deepNight = `${today}T09:00:00Z`; // 2am Pacific, 5am Eastern, 11pm Hawaii
+          const midday = `${today}T21:00:00Z`; // 2pm Pacific, 5pm Eastern, 11am Hawaii
+
           const nightContact = await db.contact.create({
             data: {
               organizationId: orgId, name: 'Nox Vale', email: `nox-${stamp}@example.com`,
-              phone: `+1${nighttime.npa}555${String(stamp).slice(-4)}`,
+              phone: `+1415555${String(stamp).slice(-4)}`,
               emailConsent: 'SUBSCRIBED', smsConsent: 'SUBSCRIBED', source: 'phase 10 test',
             },
           });
-          const nightQueued = await fetch(`${BASE}/api/send`, {
+
+          // Layer 1 — the composer refuses a send scheduled for an hour when
+          // nobody on the list can legally receive it.
+          const refused = await fetch(`${BASE}/api/send`, {
             method: 'POST', headers: auth,
-            body: JSON.stringify({ channel: 'sms', body: 'Late night offer', contactIds: [nightContact.id] }),
+            body: JSON.stringify({ channel: 'sms', body: 'Late night offer', contactIds: [nightContact.id], sendAt: deepNight }),
           }).then((r) => r.json());
-          if (nightQueued.ok) {
-            __installSender('sms', twilioSender({
-              accountSid: process.env.MOCK_TWILIO_SID || 'ACmock00000000000000000000000000',
-              authToken: process.env.MOCK_TWILIO_TOKEN || 'mock-twilio-auth-token',
-              from: '+15550001111', statusCallback: `${BASE}/api/webhooks/twilio/status`, baseUrl: MOCK,
-            }));
-            try {
-              const nightRun = await dispatch('sms', { limit: 50 });
-              nightRun.deferred >= 1 && nightRun.sent === 0
-                ? ok(`a ${nighttime.npa} number is held — ${localAt(nighttime.offset)}:00 is outside their window`)
-                : bad(`night send: ${nightRun.sent} sent, ${nightRun.deferred} deferred`);
-              (await db.smsDelivery.findFirst({ where: { contactId: nightContact.id } }))?.status === 'QUEUED'
-                ? ok('and left queued rather than failed, so it goes out in the morning')
-                : bad('a deferred message was not left queued');
-            } finally {
-              __resetSenders();
-            }
+          !refused.ok && /between 8pm and 9am|quiet|restricted/i.test(refused.reason ?? '')
+            ? ok('the composer refuses a send timed for the middle of everyone\u2019s night')
+            : bad(`night compose: ${JSON.stringify(refused).slice(0, 120)}`);
+
+          // Layer 2 — a message already queued (a scheduled campaign whose
+          // moment arrived while its recipients were asleep) is deferred by
+          // the dispatcher, not sent and not failed.
+          const nightBatch = await db.messageBatch.create({
+            data: {
+              organizationId: orgId, channel: 'SMS', variationId: `adhoc:night-${stamp}`,
+              body: 'Good morning offer', fromName: 'Summit Local',
+            },
+          });
+          await db.smsDelivery.create({
+            data: {
+              variationId: `adhoc:night-${stamp}`, batchId: nightBatch.id, contactId: nightContact.id,
+              status: 'QUEUED', segments: 1, encoding: 'GSM-7', costCents: 79,
+            },
+          });
+
+          __installSender('sms', twilioSender({
+            accountSid: process.env.MOCK_TWILIO_SID || 'ACmock00000000000000000000000000',
+            authToken: process.env.MOCK_TWILIO_TOKEN || 'mock-twilio-auth-token',
+            from: '+15550001111', statusCallback: `${BASE}/api/webhooks/twilio/status`, baseUrl: MOCK,
+          }));
+          try {
+            const carrierBefore = (await fetch(`${MOCK}/__messages`).then((r) => r.json())).messages.length;
+            const nightRun = await dispatch('sms', { limit: 50, now: new Date(deepNight) });
+            nightRun.deferred >= 1 && nightRun.sent === 0
+              ? ok('at 2am Pacific the dispatcher holds the message')
+              : bad(`night dispatch: ${nightRun.sent} sent, ${nightRun.deferred} deferred`);
+            (await db.smsDelivery.findFirst({ where: { contactId: nightContact.id } }))?.status === 'QUEUED'
+              ? ok('and leaves it queued rather than failed')
+              : bad('a deferred message was not left queued');
+            const carrierMid = (await fetch(`${MOCK}/__messages`).then((r) => r.json())).messages.length;
+            carrierMid === carrierBefore
+              ? ok('nothing reached the carrier during quiet hours')
+              : bad('a quiet-hours message reached the carrier');
+
+            // And the morning actually comes: the same row goes out when the
+            // clock says it may.
+            const morningRun = await dispatch('sms', { limit: 50, now: new Date(midday) });
+            morningRun.sent >= 1
+              ? ok('the same message sends when the window opens \u2014 deferral is a delay, not a loss')
+              : bad(`morning dispatch: ${morningRun.sent} sent, ${morningRun.deferred} deferred`);
+          } finally {
+            __resetSenders();
           }
+          await db.spendEntry.deleteMany({ where: { organizationId: orgId, note: { contains: nightContact.phone! } } });
           await db.smsDelivery.deleteMany({ where: { contactId: nightContact.id } });
+          await db.messageBatch.delete({ where: { id: nightBatch.id } }).catch(() => {});
           await db.contact.delete({ where: { id: nightContact.id } }).catch(() => {});
-        } else {
-          console.log('  NOTE every US zone is inside sending hours right now; quiet-hours deferral not exercised');
         }
 
         contactId = contact.id;

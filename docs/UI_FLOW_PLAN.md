@@ -81,12 +81,17 @@ hour and says the honest split — who can receive it then, who is held until
 their own morning — with the blocked notice reserved for the case where
 that first number is zero.
 
-## Known flake (open)
+## Known flake — **closed**
 
-The Phase 10 night-send check is sensitive around the quiet-hours opening
-boundary (observed 13:00–14:00 UTC: it picks Central at 8:xx local as its
-"night" zone and the dispatcher's verdict disagrees with the test's). It now
-imports `QUIET_HOURS` instead of hardcoding 9, but one disagreement remains
-unexplained — "1 sent, 0 deferred" while the product math says defer. Needs
-a session with the dispatcher logs open, not a threshold tweak.
+The night-send check depended on the wall clock twice over: it hunted for a
+US zone currently asleep (skipping silently when none was, and skipping
+*always* once the composer correctly started refusing all-asleep lists),
+and its zone table disagreed with the product's near boundaries. Fixed by
+making both layers take the clock as input — the composer already accepted
+`sendAt`; the dispatcher gained an injectable `now` — so the test picks the
+hour instead of waiting for it. It now runs at every hour of day and checks
+more than it ever did: the composer refuses a send timed for the middle of
+everyone's night, the dispatcher holds a queued message at 2am Pacific and
+leaves it queued, nothing reaches the carrier, and the same message goes
+out when the window opens — deferral is a delay, not a loss.
 

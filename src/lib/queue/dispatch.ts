@@ -50,7 +50,19 @@ export interface DispatchResult {
  * to be composed again. Failing a thousand messages because a setup step is
  * outstanding would turn a configuration gap into lost work.
  */
-export async function dispatch(channel: SendChannel, opts: { limit?: number } = {}): Promise<DispatchResult> {
+export async function dispatch(
+  channel: SendChannel,
+  opts: {
+    limit?: number;
+    /**
+     * The clock, injectable for tests. Quiet hours are a function of the
+     * wall time, which made the deferral path testable only during US
+     * night — a check that can only run when its author is asleep is a
+     * check that mostly doesn't run. Production callers omit it.
+     */
+    now?: Date;
+  } = {}
+): Promise<DispatchResult> {
   const limit = opts.limit ?? 200;
   const sender = senderFor(channel);
   const table = channel === 'email' ? db.emailDelivery : db.smsDelivery;
@@ -131,7 +143,7 @@ export async function dispatch(channel: SendChannel, opts: { limit?: number } = 
     // spanning four time zones is legal for some of it and not for the rest at
     // any given moment — one check for the whole batch is the wrong shape.
     if (channel === 'sms') {
-      const now = new Date();
+      const now = opts.now ?? new Date();
       const zone = effectiveOffset(to, now);
       const verdict = checkQuietHours(now, zone.offsetHours);
       if (!verdict.allowed) {
