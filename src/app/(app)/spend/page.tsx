@@ -5,6 +5,7 @@ import { AD_RATES, EMAIL_RATES, FIXED_COSTS, SMS_RATES, amount, money, range } f
 import { forecastMonth, projectAds, type AdPlan } from '@/lib/projection';
 import { CHANNEL_META } from '@/lib/channels';
 import { useApp } from '@/lib/store';
+import { Collapsible, CollapseAll } from '@/components/Collapsible';
 import type { Channel } from '@/lib/types';
 
 /**
@@ -197,9 +198,16 @@ export default function SpendPage() {
             What it buys is a range, and it stays a range.
           </div>
         </div>
+        <CollapseAll prefix="spend." count={4} />
       </div>
 
       {/* ------------------------------------------------------ the month */}
+      <Collapsible
+        id="spend.month"
+        title="The month so far"
+        defaultOpen
+        summary={`${amount(chargedCents)} charged · ${queuedMessages.toLocaleString('en-US')} messages committed`}
+      >
       {nothingCanSend && (
         <div className="notice warn" style={{ marginBottom: 14 }}>
           <span>
@@ -305,7 +313,15 @@ export default function SpendPage() {
         </p>
       </div>
 
+      </Collapsible>
+
       {/* ------------------------------------------------------- planner */}
+      <Collapsible
+        id="spend.planner"
+        title="Plan a flight"
+        defaultOpen
+        summary={`${plans.length} ${plans.length === 1 ? 'plan' : 'plans'} sketched · ${amount(adProjection.exactCents)} if committed`}
+      >
       <div className="card card-pad" style={{ marginBottom: 14 }}>
         <div className="send-section-head">
           <h3>Plan an ad flight</h3>
@@ -440,7 +456,15 @@ export default function SpendPage() {
         ))}
       </div>
 
+      </Collapsible>
+
       {/* ------------------------------------------------------- flights */}
+      <Collapsible
+        id="spend.flights"
+        title="Flights"
+        defaultOpen
+        summary={flights.length === 0 ? 'none planned yet' : `${flights.length} ${flights.length === 1 ? 'flight' : 'flights'}`}
+      >
       {(flights.length > 0 || brief || flightMsg) && (
         <div className="card card-pad" style={{ marginBottom: 14 }} data-testid="flights-panel">
           <h2 style={{ marginTop: 0 }}>Flights</h2>
@@ -584,7 +608,10 @@ export default function SpendPage() {
         </div>
       )}
 
+      </Collapsible>
+
       {/* ------------------------------------------------------ rate card */}
+      <Collapsible id="spend.ratecard" title="What each channel costs" defaultOpen={false} summary="rates for every channel — always ranges, never midpoints">
       <div className="card card-pad">
         <div className="send-section-head">
           <h3>What everything costs</h3>
@@ -667,6 +694,7 @@ export default function SpendPage() {
           </section>
         </div>
       </div>
+      </Collapsible>
     </div>
   );
 }

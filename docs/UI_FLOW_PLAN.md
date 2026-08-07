@@ -60,10 +60,15 @@ folding sections — money and results (with per-channel cost-per-result from
 exact money over measured outcomes only), messages sent, ad flights. The
 page about intentions became a page about outcomes too.
 
-### Phase 19 — The density pass
-Collapsible on the five screens above, with summaries that keep answering
-while folded ("$210 planned · 2 flights · $47 estimated") — the pattern
-`/analytics` already set.
+### Phase 19 — The density pass — **/spend done; rest deferred**
+`/spend` — the heaviest screen — folds in four sections with live summaries
+("$4.20 charged · 1,110 messages committed", "2 plans sketched · $210 if
+committed"), the rate card shipping pre-folded because 400 lines of
+reference material is reading matter, not status. `/send` and `/advertise`
+keep their own numbered-step and route-group headers; converting those to
+Collapsible means merging two header systems, deferred to its own pass
+rather than half-done. `/discover` is a staged flow, not a report — folding
+it would hide steps, so it stays as is by decision, not omission.
 
 ### Phase 20 — One price language
 A single PriceTag component carrying the three styles that already exist —
@@ -71,3 +76,13 @@ exact, ~estimated, low–high range — so every screen renders money the same
 way. Fix the `/send` hour what-if to use `quietHoursForAudience` (already
 built server-side): show "951 of 1,110 can receive it now", which is true,
 instead of a local hour that is nobody's.
+
+## Known flake (open)
+
+The Phase 10 night-send check is sensitive around the quiet-hours opening
+boundary (observed 13:00–14:00 UTC: it picks Central at 8:xx local as its
+"night" zone and the dispatcher's verdict disagrees with the test's). It now
+imports `QUIET_HOURS` instead of hardcoding 9, but one disagreement remains
+unexplained — "1 sent, 0 deferred" while the product math says defer. Needs
+a session with the dispatcher logs open, not a threshold tweak.
+

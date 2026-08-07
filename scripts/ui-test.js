@@ -1173,7 +1173,9 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
 
   console.log('\n== 19. The dense pages fold ==');
   {
-    for (const [route, prefix, min] of [['/hud', 'hud.', 30], ['/analytics', 'analytics.', 20]]) {
+    for (const [route, prefix, min] of [['/hud', 'hud.', 30], ['/analytics', 'analytics.', 20], // /spend ships its heaviest section (the rate card) pre-folded, so
+    // collapse-all has less left to save — the density win is at load time.
+    ['/spend', 'spend.', 15]]) {
       await page.goto('http://localhost:3000' + route, { waitUntil: 'networkidle' });
       await page.waitForTimeout(700);
       const open = await page.evaluate(() => document.body.scrollHeight);

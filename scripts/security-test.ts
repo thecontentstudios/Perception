@@ -1197,8 +1197,12 @@ async function main() {
         { npa: '415', offset: -7 }, // Pacific
         { npa: '808', offset: -10 }, // Hawaii
       ];
-      const daytime = ZONES.find((z) => localAt(z.offset) >= 9 && localAt(z.offset) < 20);
-      const nighttime = ZONES.find((z) => localAt(z.offset) < 9 || localAt(z.offset) >= 20);
+      // The boundaries are the product's own, imported — a literal here
+      // drifts the first time QUIET_HOURS changes, and this section then
+      // fails only at the hours of day where the two disagree.
+      const { QUIET_HOURS } = await import('../src/lib/sms');
+      const daytime = ZONES.find((z) => localAt(z.offset) >= QUIET_HOURS.openHour && localAt(z.offset) < QUIET_HOURS.closeHour);
+      const nighttime = ZONES.find((z) => localAt(z.offset) < QUIET_HOURS.openHour || localAt(z.offset) >= QUIET_HOURS.closeHour);
 
       if (!daytime) {
         console.log('  SKIP no US time zone is inside sending hours right now');
