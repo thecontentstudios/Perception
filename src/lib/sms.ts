@@ -26,6 +26,8 @@
  * substitution that takes the cost back down.
  */
 
+import { effectiveOffset } from './timezone';
+
 // ---------------------------------------------------------------------------
 // The alphabet
 // ---------------------------------------------------------------------------
@@ -411,6 +413,79 @@ export function checkQuietHours(at: Date, utcOffsetHours: number): QuietHoursVer
         ? `${localHour}:00 local — too early. Marketing texts are restricted before ${QUIET_HOURS.openHour}am.`
         : `${localHour}:00 local — too late. Marketing texts are restricted after ${QUIET_HOURS.closeHour - 12}pm.`,
     nextOpening: next,
+  };
+}
+
+/**
+ * Quiet hours for a whole audience, judged recipient by recipient.
+ *
+ * One clock for a batch is the wrong shape: a list spanning four time zones
+ * is legal for some of it and illegal for the rest at any given moment. The
+ * verdict here mirrors what the dispatcher will actually do — send to the
+ * recipients whose local time allows it, hold the rest — so the number the
+ * composer shows is the number that happens.
+ *
+ * `allowed` is false only when **nobody** can receive a text right now. That
+ * is the only situation where refusing the send tells the owner something
+ * true; refusing because the *owner's* clock says 8pm silences a Hawaii
+ * customer's 5pm afternoon.
+ */
+export interface AudienceQuietVerdict {
+  allowed: boolean;
+  /** How many recipients can legally receive a text at this moment. */
+  sendableNow: number;
+  /** How many the dispatcher will hold until their own morning. */
+  deferred: number;
+  reason: string;
+  /** Earliest moment the first held recipient becomes reachable. */
+  nextOpening: Date | null;
+}
+
+export function quietHoursForAudience(
+  contacts: { phone?: string | null }[],
+  at: Date
+): AudienceQuietVerdict {
+  let sendableNow = 0;
+  let deferred = 0;
+  let nextOpening: Date | null = null;
+
+  for (const c of contacts) {
+    const zone = effectiveOffset(c.phone, at);
+    const verdict = checkQuietHours(at, zone.offsetHours);
+    if (verdict.allowed) {
+      sendableNow += 1;
+    } else {
+      deferred += 1;
+      if (verdict.nextOpening && (!nextOpening || verdict.nextOpening < nextOpening)) {
+        nextOpening = verdict.nextOpening;
+      }
+    }
+  }
+
+  if (contacts.length === 0) {
+    return { allowed: true, sendableNow: 0, deferred: 0, reason: 'Nobody to check.', nextOpening: null };
+  }
+
+  if (sendableNow === 0) {
+    return {
+      allowed: false,
+      sendableNow,
+      deferred,
+      reason:
+        'It is between 8pm and 9am for everyone on this list. Marketing texts are restricted to daytime hours — schedule it, or send in the morning.',
+      nextOpening,
+    };
+  }
+
+  return {
+    allowed: true,
+    sendableNow,
+    deferred,
+    reason:
+      deferred === 0
+        ? 'Inside sending hours for everyone on this list.'
+        : `${sendableNow} of ${contacts.length} can receive it now; ${deferred} will be held until their own morning.`,
+    nextOpening,
   };
 }
 

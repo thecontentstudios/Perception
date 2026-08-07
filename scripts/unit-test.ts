@@ -7,7 +7,7 @@ import { buildFacets, graphemeLength } from '../src/lib/publishers/bluesky';
 import { encrypt, decrypt, pkceChallenge, safeEqual } from '../src/lib/oauth/crypto';
 import { mastodonPublisher } from '../src/lib/publishers/mastodon';
 import { readFileSync } from 'node:fs';
-import { countSegments, encodingOf, previewSms, proposeDowngrade, checkQuietHours } from '../src/lib/sms';
+import { countSegments, encodingOf, previewSms, proposeDowngrade, checkQuietHours, quietHoursForAudience } from '../src/lib/sms';
 import { checkBudget, forecastMonth, projectAds, projectEmail, projectSms } from '../src/lib/projection';
 import { amount, money, range } from '../src/lib/pricing';
 import { reachFor, reachSummary } from '../src/lib/audience';
@@ -938,6 +938,51 @@ async function readPathChecks() {
 }
 
 /**
+ * Quiet hours across an audience — the batch verdict must mirror what the
+ * dispatcher will do, recipient by recipient, and refuse only when nobody
+ * can legally receive a text. One clock for a batch silences a Hawaii
+ * afternoon because it is 8pm in California.
+ */
+function audienceQuietChecks() {
+  console.log('\n== Quiet hours are the recipient\'s, even in the composer ==');
+
+  // 04:00 UTC on a summer date: 9pm Pacific (DST, -7), 6pm Hawaii (-10).
+  const at = new Date('2026-08-07T04:00:00Z');
+  const pacific = { phone: '+14155550100' };
+  const hawaii = { phone: '+18085550100' };
+  const unknown = { phone: '+9900000000' };
+
+  const mixed = quietHoursForAudience([pacific, hawaii], at);
+  mixed.allowed
+    ? ok('a mixed list sends: 9pm in San Francisco does not silence 6pm in Honolulu')
+    : bad(`mixed list refused: ${mixed.reason}`);
+  mixed.sendableNow === 1 && mixed.deferred === 1
+    ? ok(`and says exactly who waits (${mixed.sendableNow} now, ${mixed.deferred} held)`)
+    : bad(`expected 1/1, got ${mixed.sendableNow}/${mixed.deferred}`);
+
+  const asleep = quietHoursForAudience([pacific], at);
+  !asleep.allowed
+    ? ok('a list that is entirely inside quiet hours is refused')
+    : bad('sent to a list where everyone is asleep');
+  asleep.nextOpening !== null
+    ? ok('and the refusal says when sending opens again')
+    : bad('no next opening on the refusal');
+
+  // An unknown number is held to the most restrictive US zone. At 04:00 UTC
+  // that zone (Hawaii) is inside hours, so unknown is sendable — but at
+  // 08:00 UTC (10pm Hawaii) it must not be.
+  const lateUnknown = quietHoursForAudience([unknown], new Date('2026-08-07T08:00:00Z'));
+  !lateUnknown.allowed
+    ? ok('an unguessable number is held to the most restrictive window')
+    : bad('an unknown zone was treated as sendable during Hawaii quiet hours');
+
+  const daytime = quietHoursForAudience([pacific, hawaii, unknown], new Date('2026-08-06T20:00:00Z'));
+  daytime.allowed && daytime.deferred === 0
+    ? ok('at 1pm Pacific / 10am Hawaii the whole list is inside hours')
+    : bad(`daytime list: ${daytime.sendableNow}/${daytime.deferred} (${daytime.reason})`);
+}
+
+/**
  * Phase 11 — the four reasons a number can be missing.
  *
  * A single "unmeasured" flag collapses all four, and the one it hides most
@@ -996,6 +1041,7 @@ async function measurabilityChecks() {
 }
 
 webhookSignatureChecks()
+  .then(async () => audienceQuietChecks())
   .then(measurabilityChecks)
   .then(readPathChecks)
   .then(() => {

@@ -3,7 +3,7 @@ import { db, dbAvailable } from '@/lib/db';
 import { handle, require_, HttpError } from '@/lib/auth/guard';
 import { reachFor } from '@/lib/audience';
 import { checkBudget, combine, projectEmail, projectSms, type Projection } from '@/lib/projection';
-import { checkQuietHours, previewRange, previewSms } from '@/lib/sms';
+import { previewRange, previewSms, quietHoursForAudience } from '@/lib/sms';
 import { EMAIL_RATES, SMS_RATES } from '@/lib/pricing';
 import { sendingStatus } from '@/lib/senders/registry';
 import { allocateCents, spendSplit } from '@/lib/billing';
@@ -196,13 +196,19 @@ export async function POST(req: Request) {
         })
       : null;
 
-    // Quiet hours, for SMS only, and only for an immediate send. A scheduled
-    // send is checked again by the worker at the moment it fires — the answer
-    // depends on the clock, so checking it now and trusting it later would be
-    // checking the wrong time.
+    // Quiet hours, for SMS only, and **per recipient** — the window is the
+    // recipient's, not the owner's. This used to check one clock, the org's
+    // configured offset, and refuse the whole batch on it: at 8pm Pacific an
+    // owner could not text their Hawaii customers at 5pm local, even though
+    // the dispatcher (which re-checks per recipient at fire time) would have
+    // sent those and deferred the rest correctly. The batch is refused only
+    // when *nobody* on it can legally receive a text right now.
+    //
+    // A scheduled send is still checked again by the worker at the moment it
+    // fires — the answer depends on the clock, so checking it now and
+    // trusting it later would be checking the wrong time.
     const sendAt = body.sendAt ? new Date(body.sendAt) : new Date();
-    const quiet =
-      body.channel === 'sms' ? checkQuietHours(sendAt, settings.utcOffsetHours) : null;
+    const quiet = body.channel === 'sms' ? quietHoursForAudience(reach.contacts, sendAt) : null;
 
     const nameRange =
       body.channel === 'sms'

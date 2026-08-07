@@ -1390,3 +1390,27 @@ All three replaced with waits on the observable outcome.
 the missing-alt-text warning creeping up to match. There is no delete surface
 in the product yet — a real gap, deliberately not built mid-phase — so the
 suite cleans up its own row directly.
+
+### 11.6 — The clock caught the composer (follow-up)
+
+The first full-suite run after US evening fell over with *"20:00 local — too
+late"*: the acceptance suite sends real texts through the real path, and after
+8pm Pacific the composer refused them — including one addressed to Hawaii,
+where it was 5pm.
+
+Phase 10 made quiet hours per-recipient in the dispatcher and left the
+composer's gate on one clock, the org's configured offset, refusing the whole
+batch on it. The two disagreed exactly when the sun went down. Now the
+composer judges the audience the way the dispatcher will act on it:
+`quietHoursForAudience` counts who can legally receive a text at this moment
+and who will be held until their own morning, and refuses only when that first
+number is zero. The response carries both counts, so the composer can say
+"951 of 1,110 can receive it now" instead of lying in either direction.
+
+The suite itself already knew — it picks a contact in a zone where it is
+currently daytime — which is why the failure pointed at the product and not
+the test. Unit checks pin the design with fixed timestamps: 9pm in San
+Francisco does not silence 6pm in Honolulu, a list that is entirely asleep is
+refused with its next opening, and an unguessable number stays held to the
+most restrictive window.
+
