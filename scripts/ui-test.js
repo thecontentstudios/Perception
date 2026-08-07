@@ -905,7 +905,11 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
 
       // And the screen has to say which it is showing.
       await page.goto('http://localhost:3000/analytics', { waitUntil: 'networkidle' });
-      await page.waitForTimeout(800);
+      // The banner flips to "Computed from your rows" when the client fetch
+      // resolves — wait for that, not for a guessed interval.
+      await page
+        .waitForFunction(() => document.body.innerText.includes('Computed from your rows'), { timeout: 20000 })
+        .catch(() => {});
       const banner = await page.$eval('.page .card .demo-clock', (e) => e.textContent.trim());
       banner.includes('Computed')
         ? ok(`the page says where its numbers came from ("${banner}")`)
@@ -941,7 +945,14 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
     } else {
       await page.setViewportSize({ width: 1440, height: 960 });
       await page.goto('http://localhost:3000/learned', { waitUntil: 'networkidle' });
-      await page.waitForTimeout(1000);
+      // The insights arrive from /api/learning in a client effect, after the
+      // network has already gone quiet once — so wait for the sample sentence
+      // itself, not a fixed interval. With four suites' worth of load on the
+      // database the computation can take longer than any number chosen here
+      // would have allowed for.
+      await page
+        .waitForFunction(() => /Based on \d+ published posts?/.test(document.body.innerText), { timeout: 20000 })
+        .catch(() => {});
 
       const text = await page.evaluate(() => document.body.innerText);
 
