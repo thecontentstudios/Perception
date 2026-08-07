@@ -4,6 +4,7 @@ import { fetchBlueskyMetrics, graphemeLength, publishToBluesky } from './bluesky
 import { mastodonContext, mastodonPublisher } from './mastodon';
 import { facebookPublisher } from './meta';
 import { instagramPublisher, threadsPublisher } from './meta-family';
+import { redditPublisher } from './reddit';
 import { summaries } from '../oauth/store';
 
 const MAX_GRAPHEMES = 300;
@@ -77,6 +78,7 @@ const REGISTRY: Partial<Record<Channel, Publisher>> = {
   facebook: facebookPublisher,
   instagram: instagramPublisher,
   threads: threadsPublisher,
+  reddit: redditPublisher,
 };
 
 /** The publisher for a channel, or null when nothing can publish it yet. */
@@ -92,7 +94,7 @@ export function publisherFor(channel: Channel): Publisher | null {
 export function canPublish(channel: Channel): boolean {
   if (channel === 'bluesky') return blueskyContext() !== null;
   if (channel === 'mastodon') return mastodonContext() !== null;
-  if (channel === 'facebook' || channel === 'instagram' || channel === 'threads') {
+  if (channel === 'facebook' || channel === 'instagram' || channel === 'threads' || channel === 'reddit') {
     return summaries().some((g) => g.channel === channel);
   }
   return false;

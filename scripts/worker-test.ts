@@ -261,6 +261,8 @@ async function main() {
 
   await listenSection();
 
+  await tierSection();
+
   await cleanup();
 }
 
@@ -809,6 +811,61 @@ async function refreshMetricsProof() {
   perf.meta.metricsAsOf && Date.now() - new Date(perf.meta.metricsAsOf).getTime() < 60_000
     ? ok('and the report says when its numbers are from — a stale number can look stale')
     : bad(`metricsAsOf: ${perf.meta.metricsAsOf}`);
+}
+
+
+/**
+ * Phase 17 — the registry widens, and the gaps say which kind of gap they are.
+ */
+async function tierSection() {
+  console.log('\n== Reddit publishes, and every gap names its kind ==');
+
+  const REDDIT = process.env.REDDIT_BASE_URL || 'http://localhost:4327';
+  const up = await fetch(`${REDDIT}/__posts`).then((r) => r.ok).catch(() => false);
+  if (!up) return bad('mock-reddit is not running — node scripts/mock-reddit.js');
+  await fetch(`${REDDIT}/__reset`, { method: 'POST' });
+
+  const { redditPublisher } = await import('../src/lib/publishers/reddit');
+  const { publisherTier } = await import('../src/lib/publishers/tiers');
+
+  saveGrant({
+    channel: 'reddit', accessToken: process.env.MOCK_REDDIT_TOKEN || 'mock-reddit-token',
+    refreshToken: null, expiresInSec: null, scopes: ['submit'],
+    accountLabel: 'r/summitlocal', externalAccountId: 'summitlocal',
+  });
+  try {
+    const out = await redditPublisher.publish('Spring cleanups are booking now\nFlat quotes, no site visit. Book online.', {});
+    out.ok && out.id?.startsWith('t3_')
+      ? ok(`reddit: submitted as a self post (${out.id})`)
+      : bad(`reddit publish: ${JSON.stringify(out).slice(0, 120)}`);
+    const wire = await fetch(`${REDDIT}/__posts`).then((r) => r.json());
+    wire.posts[0]?.title === 'Spring cleanups are booking now' && /Flat quotes/.test(wire.posts[0]?.text)
+      ? ok('the first line became the title, the rest the body')
+      : bad(`reddit wire: ${JSON.stringify(wire.posts[0]).slice(0, 120)}`);
+
+    await fetch(`${REDDIT}/__score`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: out.id, score: 44, comments: 7 }),
+    });
+    const m = await redditPublisher.fetchMetrics!(out.id!);
+    m.ok && m.metrics?.engagements === 51 && m.metrics?.impressions === null
+      ? ok('score+comments read back (51); impressions stay null — view counts are moderator-only')
+      : bad(`reddit metrics: ${JSON.stringify(m)}`);
+
+    // The tier answers: computed for live, stated for the rest.
+    publisherTier('reddit').tier === 'live'
+      ? ok('reddit now answers "live" — the tier is computed from the registry, not written')
+      : bad(`reddit tier: ${publisherTier('reddit').tier}`);
+    publisherTier('linkedin').tier === 'approval_gated'
+      ? ok('linkedin says it waits on their approval, not ours')
+      : bad(`linkedin tier: ${publisherTier('linkedin').tier}`);
+    const nd = publisherTier('nextdoor');
+    nd.tier === 'no_api' && /no posting API/i.test(nd.reason) && /flight/.test(nd.alternative ?? '')
+      ? ok('nextdoor says no API exists — and routes the budget to the ad brief instead')
+      : bad(`nextdoor: ${JSON.stringify(nd)}`);
+  } finally {
+    removeGrant('reddit');
+  }
 }
 
 /** Leave the demo workspace exactly as found, so the suite re-runs. */

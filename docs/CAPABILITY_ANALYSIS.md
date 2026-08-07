@@ -20,7 +20,7 @@ to the cent. What has not kept pace is the part that touches the outside world.
 | Server surface (`src/app/api`) | ~3,700 lines | Real, authenticated, tenant-scoped |
 | Worker + queue | ~420 lines | Real; fires scheduled posts |
 | Tests | ~4,800 lines | 719 checks, five suites |
-| **Channels that can actually publish** | **5 of 18** | Bluesky, Mastodon, Facebook, Instagram, Threads |
+| **Channels that can actually publish** | **6 of 18** | Bluesky, Mastodon, Facebook, Instagram, Threads, Reddit |
 | **Channels that can actually send** | **2 of 2** | Email through Resend, SMS through Twilio |
 | **Ad platforms that can actually buy** | **0 of 11** | Priced, planned, never purchased |
 
@@ -367,13 +367,16 @@ labelled `estimated` with the ~ it deserves, and no number at all until
 there is at least one result. Never the platform's self-graded conversion
 column.
 
-### Phase 17 — The rest of the registry, tiered honestly
+### Phase 17 — The rest of the registry, tiered honestly — **started**
 
-- **Feasible now:** Pinterest, Reddit, Google Business Profile.
-- **Paid or approval-gated:** X (paid API), LinkedIn, TikTok, YouTube,
-  WhatsApp — build behind the same contract, ship as each account clears.
-- **No organic API exists:** Nextdoor, Snapchat — the screen says so and
-  routes their budget to the ad brief instead. An honest "cannot" outranks
-  a fake "soon".
+`publisherTier()` states what every channel genuinely is, once: `live` is
+computed from the registry (this file cannot claim what the code cannot
+deliver); `feasible` means public API, build time only; `approval_gated`
+means a review queue on someone else's clock; `no_api` means nobody has one
+— Nextdoor and Snapchat say so and route that budget to the ad brief, which
+those platforms do support. Reddit shipped as the sixth live channel:
+submit with the first line as title, errors-inside-a-200 handled, score and
+comments read back, impressions honestly null (view counts are
+moderator-only). Remaining feasible: Pinterest, Google Business Profile.
 
 ## What is deliberately not on this list

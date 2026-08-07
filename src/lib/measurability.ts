@@ -121,7 +121,7 @@ const OURS: Metric[] = ['leads', 'conversions', 'revenue'];
  * platform will not say" into "we have not asked", which is the exact
  * distinction this file exists to preserve.
  */
-const INGESTED: Channel[] = ['email', 'sms', 'bluesky', 'mastodon', 'website', 'facebook', 'instagram', 'threads'];
+const INGESTED: Channel[] = ['email', 'sms', 'bluesky', 'mastodon', 'website', 'facebook', 'instagram', 'threads', 'reddit'];
 
 export interface MeasurabilityContext {
   /** Channels holding a live grant right now. */
