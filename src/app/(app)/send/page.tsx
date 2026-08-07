@@ -3,7 +3,7 @@
 import { useMemo, useState } from 'react';
 import { BRANDS, SEGMENTS, useApp } from '@/lib/store';
 import { reachFor, reachSummary } from '@/lib/audience';
-import { previewSms, proposeDowngrade, previewRange, checkQuietHours } from '@/lib/sms';
+import { previewSms, proposeDowngrade, previewRange, quietHoursForAudience } from '@/lib/sms';
 import { projectEmail, projectSms, type Projection } from '@/lib/projection';
 import { EMAIL_RATES, SMS_RATES, money } from '@/lib/pricing';
 import { CostRail } from './CostRail';
@@ -94,13 +94,19 @@ export default function SendPage() {
     });
   }, [mode, provider, reach.reachable, sentThisMonth, domainVerified, smsBody, country, setupPaid]);
 
-  // A send is only ever attempted at a real hour, so the quiet-hours answer
-  // is computed for the hour actually chosen rather than for "now".
+  // Quiet hours, judged the way the dispatcher will act on them: recipient
+  // by recipient, at the hour actually chosen. The old what-if here computed
+  // one verdict at UTC offset 0 — a "local time" that was nobody's — and
+  // could block a send to Honolulu at 5pm because the owner's clock said 8pm.
+  // Now the answer is the honest split: who can receive it then, who will be
+  // held until their own morning.
   const quiet = useMemo(() => {
-    if (mode !== 'sms') return null;
-    const at = new Date(Date.UTC(2026, 0, 1, hour, 0, 0));
-    return checkQuietHours(at, 0);
-  }, [mode, hour]);
+    if (mode !== 'sms' || reach.contacts.length === 0) return null;
+    const at = new Date();
+    at.setHours(hour, 0, 0, 0);
+    if (at.getTime() < Date.now()) at.setDate(at.getDate() + 1);
+    return quietHoursForAudience(reach.contacts, at);
+  }, [mode, hour, reach.contacts]);
 
   const applyDowngrade = () => {
     if (downgrade) setSmsBody(downgrade.text);
@@ -447,9 +453,16 @@ export default function SendPage() {
                 </div>
                 {quiet && !quiet.allowed && (
                   <div className="notice warn" style={{ marginTop: 10 }}>
-                    <strong>Outside sending hours.</strong> {quiet.reason} Marketing texts are restricted to 8am–9pm in
-                    the recipient&rsquo;s time zone, and the penalty runs $500–$1,500 per message. This send is blocked
-                    until the window opens.
+                    <strong>Outside sending hours for everyone on this list.</strong> {quiet.reason} The penalty for a
+                    quiet-hours text runs $500–$1,500 per message, so this send is blocked until the window opens
+                    {quiet.nextOpening ? ` (about ${new Date(quiet.nextOpening).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })})` : ''}.
+                  </div>
+                )}
+                {quiet && quiet.allowed && quiet.deferred > 0 && (
+                  <div className="notice" style={{ marginTop: 10 }}>
+                    {quiet.sendableNow.toLocaleString('en-US')} of {(quiet.sendableNow + quiet.deferred).toLocaleString('en-US')} can
+                    receive it then; {quiet.deferred.toLocaleString('en-US')} will be held until their own morning. The window is the
+                    recipient&rsquo;s, not yours — nobody is texted before 9am or after 8pm where they live.
                   </div>
                 )}
               </>

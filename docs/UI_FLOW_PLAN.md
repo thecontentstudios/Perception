@@ -70,12 +70,16 @@ Collapsible means merging two header systems, deferred to its own pass
 rather than half-done. `/discover` is a staged flow, not a report — folding
 it would hide steps, so it stays as is by decision, not omission.
 
-### Phase 20 — One price language
-A single PriceTag component carrying the three styles that already exist —
-exact, ~estimated, low–high range — so every screen renders money the same
-way. Fix the `/send` hour what-if to use `quietHoursForAudience` (already
-built server-side): show "951 of 1,110 can receive it now", which is true,
-instead of a local hour that is nobody's.
+### Phase 20 — One price language — **done**
+`PriceTag` renders the product's three kinds of money one way everywhere —
+exact at full weight, ~estimated muted with its settling tooltip, ranges
+never collapsed to midpoints — and the flights table and campaign rollup
+adopted it in place of their hand-rolled drift. The `/send` hour what-if no
+longer judges one clock at UTC offset 0 (a "local time" that was nobody's):
+it runs `quietHoursForAudience` over the actual recipients at the chosen
+hour and says the honest split — who can receive it then, who is held until
+their own morning — with the blocked notice reserved for the case where
+that first number is zero.
 
 ## Known flake (open)
 

@@ -11,6 +11,7 @@ import { CAMPAIGN_COLORS } from '@/lib/demo-data';
 import { GOAL_LABELS } from '@/lib/types';
 import { useApp } from '@/lib/store';
 import { Collapsible } from '@/components/Collapsible';
+import { PriceTag } from '@/components/PriceTag';
 
 function FauxQr() {
   // Decorative stand-in for the auto-generated campaign QR code.
@@ -193,14 +194,16 @@ export default function CampaignDetailPage() {
                   {rollup.costs.map((c) => (
                     <tr key={c.channel}>
                       <td>{CHANNEL_META[c.channel as keyof typeof CHANNEL_META]?.label ?? c.channel}</td>
-                      <td className="num">{c.exactCents > 0 ? fmtMoney(c.exactCents / 100) : '—'}</td>
-                      <td className="num" style={{ color: 'var(--muted)', fontStyle: c.estimatedCents ? 'italic' : undefined }}>
-                        {c.estimatedCents > 0 ? `~${fmtMoney(c.estimatedCents / 100)}` : '—'}
-                      </td>
+                      <td className="num">{c.exactCents > 0 ? <PriceTag kind="exact" cents={c.exactCents} /> : '—'}</td>
+                      <td className="num">{c.estimatedCents > 0 ? <PriceTag kind="estimated" cents={c.estimatedCents} /> : '—'}</td>
                       <td className="num">{c.conversions || '—'}</td>
                       <td className="num">{c.revenueCents > 0 ? fmtMoney(c.revenueCents / 100) : '—'}</td>
-                      <td className="num" title="Exact spend over measured results on this channel. Channels are never averaged together.">
-                        {c.costPerResultCents != null ? fmtMoney(c.costPerResultCents / 100) : '—'}
+                      <td className="num">
+                        {c.costPerResultCents != null ? (
+                          <PriceTag kind="exact" cents={c.costPerResultCents} title="Exact spend over measured results on this channel. Channels are never averaged together." />
+                        ) : (
+                          '—'
+                        )}
                       </td>
                     </tr>
                   ))}

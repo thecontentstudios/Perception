@@ -6,6 +6,7 @@ import { forecastMonth, projectAds, type AdPlan } from '@/lib/projection';
 import { CHANNEL_META } from '@/lib/channels';
 import { useApp } from '@/lib/store';
 import { Collapsible, CollapseAll } from '@/components/Collapsible';
+import { PriceTag } from '@/components/PriceTag';
 import type { Channel } from '@/lib/types';
 
 /**
@@ -526,23 +527,20 @@ export default function SpendPage() {
                           ? `${f.results.conversions}${f.results.revenueCents > 0 ? ` · ${amount(f.results.revenueCents)}` : ''}`
                           : '—'}
                       </td>
-                      <td
-                        className="num"
-                        // An estimated cost-per-result is set the way every
-                        // estimate on this screen is set: visibly weaker
-                        // than a settled figure, so nobody quotes it.
-                        style={f.results?.certainty === 'estimated' ? { color: 'var(--muted)', fontStyle: 'italic' } : undefined}
-                        title={
-                          f.results?.certainty === 'estimated'
-                            ? 'Based on dashboard-reported spend. Settles with the invoice.'
-                            : f.results?.certainty === 'exact'
-                              ? 'Settled invoice divided by measured results.'
-                              : 'Appears once the flight has at least one measured result.'
-                        }
-                      >
-                        {f.results?.costPerResultCents != null
-                          ? `${f.results.certainty === 'estimated' ? '~' : ''}${amount(f.results.costPerResultCents)}`
-                          : '—'}
+                      <td className="num">
+                        {f.results?.costPerResultCents != null ? (
+                          <PriceTag
+                            kind={f.results.certainty === 'estimated' ? 'estimated' : 'exact'}
+                            cents={f.results.costPerResultCents}
+                            title={
+                              f.results.certainty === 'estimated'
+                                ? 'Based on dashboard-reported spend. Settles with the invoice.'
+                                : 'Settled invoice divided by measured results.'
+                            }
+                          />
+                        ) : (
+                          <span title="Appears once the flight has at least one measured result.">—</span>
+                        )}
                       </td>
                       <td>
                         <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
