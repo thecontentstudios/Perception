@@ -237,6 +237,9 @@ export async function dispatch(channel: SendChannel, opts: { limit?: number } = 
       providerRef,
       cents: row.costCents,
       units: ourUnits,
+      // The thread that makes per-campaign cost real: the batch knows its
+      // campaign, so the charge does too. Null for a deliberate ad-hoc blast.
+      campaignId: row.batch.campaignId,
       note: `${sender.name} · ${to}${mismatch ? ` (billed ${billed} segments)` : ''}`,
     });
 

@@ -49,12 +49,16 @@ time" that is nobody's.
 
 ## The plan
 
-### Phase 18 — The campaign is the spine
-Campaign detail becomes the hub: posts, sends, flights, costs and results in
-one place, each section folding. `/send` gains a campaign picker (optional —
-ad-hoc stays legal) that stamps the batch, its deliveries and its spend.
-The flight planner takes a campaign. Campaign-level cost-per-result: exact
-spend over measured results, per channel, never blended across cost shapes.
+### Phase 18 — The campaign is the spine — **done**
+`MessageBatch` carries its campaign; the composer asks "which campaign is
+this for?" while it is cheap (ad-hoc stays legal, a foreign id is refused);
+the dispatcher stamps every charge with the batch's campaign; analytics
+attributes deliveries through the batch when the variation join cannot; the
+flight planner takes a campaign. `/api/campaigns/[id]/rollup` reads
+everything one campaign did in one call, and the detail page grew three
+folding sections — money and results (with per-channel cost-per-result from
+exact money over measured outcomes only), messages sent, ad flights. The
+page about intentions became a page about outcomes too.
 
 ### Phase 19 — The density pass
 Collapsible on the five screens above, with summaries that keep answering

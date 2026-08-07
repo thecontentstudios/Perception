@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { AD_RATES, EMAIL_RATES, FIXED_COSTS, SMS_RATES, amount, money, range } from '@/lib/pricing';
 import { forecastMonth, projectAds, type AdPlan } from '@/lib/projection';
 import { CHANNEL_META } from '@/lib/channels';
+import { useApp } from '@/lib/store';
 import type { Channel } from '@/lib/types';
 
 /**
@@ -52,6 +53,8 @@ interface Ledger {
 }
 
 export default function SpendPage() {
+  const { visibleCampaigns } = useApp();
+  const [flightCampaignId, setFlightCampaignId] = useState<string>('');
   // Ad flights being considered. Starts with one so the planner is usable on
   // arrival rather than presenting an empty state and an "Add" button.
   const [plans, setPlans] = useState<AdPlan[]>([
@@ -114,6 +117,7 @@ export default function SpendPage() {
         audience,
         body: 'Draft the ad text in the composer, or write it in the ads manager — the brief carries everything else.',
         destinationUrl,
+        campaignId: flightCampaignId || undefined,
       }),
     }).then((x) => x.json());
     if (!r.ok) {
@@ -445,6 +449,17 @@ export default function SpendPage() {
             manager, from the brief — we do not launch ads on your behalf. Spend you enter mid-flight is an
             estimate until the invoice settles it.
           </p>
+          <div style={{ marginBottom: 10 }}>
+            <label style={{ fontSize: 12, color: 'var(--ink-2)', display: 'inline-flex', gap: 8, alignItems: 'center' }}>
+              New flights belong to
+              <select className="select" value={flightCampaignId} onChange={(e) => setFlightCampaignId(e.target.value)}>
+                <option value="">no campaign</option>
+                {visibleCampaigns.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </label>
+          </div>
           {flightMsg && <div className="notice warn" style={{ marginBottom: 10 }}>{flightMsg}</div>}
 
           {flights.length > 0 && (

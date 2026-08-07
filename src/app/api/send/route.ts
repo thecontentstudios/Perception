@@ -33,6 +33,8 @@ interface SendRequest {
   /** Contacts to send to. Omit to use everyone reachable in the brand. */
   contactIds?: string[];
   brandId?: string;
+  /** The campaign this send belongs to. Optional; ad-hoc is legal. */
+  campaignId?: string;
   variationId?: string;
   dryRun?: boolean;
   /** Bypass a soft budget warning the user has now seen and accepted. */
@@ -108,6 +110,18 @@ export async function POST(req: Request) {
         },
       })
     ).map(toContact);
+
+    // A borrowed campaign id from another tenant is filtered out here the
+    // same way contact ids are: it simply is not found, no 403 to probe.
+    const campaignId = body.campaignId
+      ? (await db.campaign.findFirst({
+          where: { id: body.campaignId, organizationId: principal.organizationId },
+          select: { id: true },
+        }))?.id ?? null
+      : null;
+    if (body.campaignId && !campaignId) {
+      throw new HttpError(422, 'That campaign does not exist in this workspace.');
+    }
 
     const reach = reachFor(contacts, body.channel);
 
@@ -303,6 +317,7 @@ export async function POST(req: Request) {
           organizationId: principal.organizationId,
           brandId: body.brandId ?? null,
           channel: body.channel.toUpperCase() as never,
+          campaignId,
           variationId,
           subject: body.channel === 'email' ? (body.subject ?? '').trim() : null,
           body: text,

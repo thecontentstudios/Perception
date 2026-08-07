@@ -147,16 +147,25 @@ export async function computePerformance(organizationId: string): Promise<Comput
   });
   const campaignOfVariation = new Map(variations.map((v) => [v.id, v.contentItem.campaignId]));
 
+  // Batches carry the campaign for composer sends, whose variationId is a
+  // synthetic adhoc marker no variation lookup can resolve. Both joins are
+  // consulted: variation first (scheduled campaign sends), batch second.
+  const batches = await db.messageBatch.findMany({
+    where: { organizationId, campaignId: { not: null } },
+    select: { id: true, campaignId: true },
+  });
+  const campaignOfBatch = new Map(batches.map((b) => [b.id, b.campaignId!]));
+
   const [emails, texts, spend] = await Promise.all([
     db.emailDelivery.findMany({
       // Scoped through the contact, which is a real relation and always
       // present. The batch is nullable and would drop rows.
       where: { contact: { organizationId } },
-      select: { status: true, openedAt: true, clickedAt: true, variationId: true },
+      select: { status: true, openedAt: true, clickedAt: true, variationId: true, batchId: true },
     }),
     db.smsDelivery.findMany({
       where: { contact: { organizationId } },
-      select: { status: true, variationId: true },
+      select: { status: true, variationId: true, batchId: true },
     }),
     db.spendEntry.findMany({
       where: { organizationId, campaignId: { not: null } },
@@ -184,8 +193,12 @@ export async function computePerformance(organizationId: string): Promise<Comput
     // Channels that sent or published for this campaign but produced no click
     // are still channels that did something, and a report that omits them
     // cannot show what an email cost. Added after the click/conversion set.
-    const cEmails = emails.filter((x) => campaignOfVariation.get(x.variationId) === c.id);
-    const cTexts = texts.filter((x) => campaignOfVariation.get(x.variationId) === c.id);
+    const cEmails = emails.filter(
+      (x) => campaignOfVariation.get(x.variationId) === c.id || (x.batchId && campaignOfBatch.get(x.batchId) === c.id)
+    );
+    const cTexts = texts.filter(
+      (x) => campaignOfVariation.get(x.variationId) === c.id || (x.batchId && campaignOfBatch.get(x.batchId) === c.id)
+    );
     const cMetrics = current.filter((m) => m.variation.contentItem.campaignId === c.id);
     if (cEmails.length > 0) channels.add('email');
     if (cTexts.length > 0) channels.add('sms');

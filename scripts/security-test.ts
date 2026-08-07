@@ -1592,6 +1592,106 @@ async function main() {
     }
   }
 
+  console.log('\n== The campaign is the spine: sends and flights join it ==');
+  {
+    const user = await db.user.findFirst({ where: { passwordHash: { not: null } } });
+    const campaign = await db.campaign.findFirst({ select: { id: true, organizationId: true } });
+    if (!user || !campaign) {
+      bad('no seeded user or campaign for the spine section');
+    } else {
+      const login = await fetch(`${BASE}/api/auth/login`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: user.email, password: process.env.SEED_PASSWORD || 'demo-password-change-me' }),
+      });
+      const cookie = login.headers.get('set-cookie')?.split(';')[0] ?? '';
+      const auth = { cookie, 'content-type': 'application/json' };
+      const orgId = campaign.organizationId;
+
+      // A composer send that names its campaign.
+      const contact = await db.contact.findFirst({ where: { organizationId: orgId, emailConsent: 'SUBSCRIBED' } });
+      const sent = await fetch(`${BASE}/api/send`, {
+        method: 'POST', headers: auth,
+        body: JSON.stringify({
+          channel: 'email', subject: 'Spine test', body: 'One message, attributed.',
+          contactIds: [contact!.id], campaignId: campaign.id,
+        }),
+      }).then((r) => r.json());
+      sent.ok ? ok('a composer send accepts its campaign') : bad(`send: ${JSON.stringify(sent).slice(0, 120)}`);
+
+      const batch = await db.messageBatch.findFirst({
+        where: { organizationId: orgId, campaignId: campaign.id },
+        orderBy: { createdAt: 'desc' },
+      });
+      batch ? ok('the batch carries the campaign id') : bad('batch has no campaignId');
+
+      // A stranger campaign id is refused, not absorbed.
+      const foreign = await fetch(`${BASE}/api/send`, {
+        method: 'POST', headers: auth,
+        body: JSON.stringify({
+          channel: 'email', subject: 'x', body: 'y',
+          contactIds: [contact!.id], campaignId: 'not-a-real-campaign', dryRun: false,
+        }),
+      });
+      foreign.status === 422
+        ? ok('a campaign id from nowhere is refused')
+        : bad(`foreign campaign gave ${foreign.status}`);
+
+      // The rollup sees the send; the flight planned with a campaign joins too.
+      const flight = await fetch(`${BASE}/api/flights`, {
+        method: 'POST', headers: auth,
+        body: JSON.stringify({
+          channel: 'facebook', dailyCents: 1500, days: 7,
+          objective: 'Spine', audience: 'Everyone nearby', body: 'Ad text',
+          destinationUrl: 'https://summitlocal.test/spine', campaignId: campaign.id,
+        }),
+      }).then((r) => r.json());
+      flight.ok ? ok('a flight accepts its campaign') : bad(`flight: ${JSON.stringify(flight).slice(0, 100)}`);
+
+      const rollup = await fetch(`${BASE}/api/campaigns/${campaign.id}/rollup`, { headers: { cookie } }).then((r) => r.json());
+      rollup.ok && rollup.sends.some((b: { subject: string | null }) => b.subject === 'Spine test')
+        ? ok('the campaign rollup shows the send')
+        : bad(`rollup sends: ${JSON.stringify(rollup.sends?.slice(0, 2))}`);
+      rollup.flights.some((f: { id: string }) => f.id === flight.flight.id)
+        ? ok('and the flight, beside it')
+        : bad('rollup missing the flight');
+
+      // Cost-per-result appears only from exact money and measured results.
+      await db.spendEntry.create({
+        data: { organizationId: orgId, channel: 'EMAIL', kind: 'message', certainty: 'exact', cents: 600, campaignId: campaign.id, providerRef: `spine-${Date.now()}` },
+      });
+      await db.conversion.createMany({
+        data: [
+          { organizationId: orgId, campaignId: campaign.id, channel: 'EMAIL', kind: 'booking', valueCents: 9000, externalId: `spine-conv-1-${Date.now()}` },
+          { organizationId: orgId, campaignId: campaign.id, channel: 'EMAIL', kind: 'booking', valueCents: 9000, externalId: `spine-conv-2-${Date.now()}` },
+        ],
+      });
+      const rollup2 = await fetch(`${BASE}/api/campaigns/${campaign.id}/rollup`, { headers: { cookie } }).then((r) => r.json());
+      const emailRow = rollup2.costs.find((c: { channel: string; exactCents: number; conversions: number; costPerResultCents: number | null }) => c.channel === 'email');
+      // The seed already gives this campaign email conversions, so the check
+      // is the formula, not a fixed figure: exact money over measured
+      // results, on this channel alone.
+      emailRow && emailRow.conversions >= 2 && emailRow.costPerResultCents === Math.round(emailRow.exactCents / emailRow.conversions)
+        ? ok(`campaign cost-per-result is exact spend over measured results (${emailRow.exactCents}\u00a2 / ${emailRow.conversions})`)
+        : bad(`email cost row: ${JSON.stringify(emailRow)}`);
+
+      // Another tenant's campaign rollup is a plain 404.
+      const anon = await fetch(`${BASE}/api/campaigns/${campaign.id}/rollup`);
+      anon.status === 401 || anon.status === 403
+        ? ok('the rollup is not readable anonymously')
+        : bad(`anon rollup: ${anon.status}`);
+
+      // Cleanup.
+      await db.spendEntry.deleteMany({ where: { organizationId: orgId, providerRef: { startsWith: 'spine-' } } });
+      await db.conversion.deleteMany({ where: { organizationId: orgId, externalId: { startsWith: 'spine-conv-' } } });
+      await db.emailDelivery.deleteMany({ where: { batchId: batch?.id ?? '' } });
+      if (batch) await db.messageBatch.delete({ where: { id: batch.id } }).catch(() => {});
+      if (flight.ok) {
+        await db.spendEntry.deleteMany({ where: { flightId: flight.flight.id } });
+        await db.adFlight.delete({ where: { id: flight.flight.id } }).catch(() => {});
+      }
+    }
+  }
+
   console.log('\n== The reporting knows what it knows ==');
   {
     // The correction at the centre of Phase 11. For two phases `/analytics`

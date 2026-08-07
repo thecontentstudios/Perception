@@ -852,6 +852,10 @@ model MessageBatch {
   organization   Organization @relation(fields: [organizationId], references: [id])
   brandId        String?
   channel        Channel
+  /// The campaign this send belongs to. Optional — an ad-hoc blast is legal —
+  /// but without it the send is invisible to per-campaign results and cost,
+  /// which is where an owner looks to see whether the campaign worked.
+  campaignId     String?
   variationId    String
   subject        String?
   body           String

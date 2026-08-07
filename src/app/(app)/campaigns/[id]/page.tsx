@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { VariationEditor } from '@/components/VariationEditor';
 import { fmtMoney, fmtNum, StatusPill, WarnBadge } from '@/components/ui';
 import { CHANNEL_META, ChannelIcon } from '@/lib/channels';
@@ -10,6 +10,7 @@ import { fmtDateTime, fmtShort } from '@/lib/dates';
 import { CAMPAIGN_COLORS } from '@/lib/demo-data';
 import { GOAL_LABELS } from '@/lib/types';
 import { useApp } from '@/lib/store';
+import { Collapsible } from '@/components/Collapsible';
 
 function FauxQr() {
   // Decorative stand-in for the auto-generated campaign QR code.
@@ -28,10 +29,35 @@ function FauxQr() {
   );
 }
 
+interface Rollup {
+  sends: { id: string; channel: string; subject: string | null; preview: string; sentAt: string; total: number; delivered: number; opened: number }[];
+  flights: { id: string; channel: string; status: string; dailyCents: number; days: number; settledCents: number | null; results: { conversions: number; revenueCents: number; costPerResultCents: number | null; certainty: string | null } }[];
+  costs: { channel: string; exactCents: number; estimatedCents: number; conversions: number; revenueCents: number; costPerResultCents: number | null }[];
+  totals: { exactCents: number; estimatedCents: number; conversions: number; revenueCents: number };
+}
+
 export default function CampaignDetailPage() {
   const params = useParams<{ id: string }>();
   const { state, campaignById, brandById, itemById, performanceFor, preflightFor } = useApp();
   const [selected, setSelected] = useState<string | null>(null);
+
+  /**
+   * What the campaign actually did — sends, flights, money, results — from
+   * the rollup endpoint. The store above knows the plan; this knows the
+   * outcome, and the page shows both because "what we intended" and "what
+   * happened" are different sections, not different apps.
+   */
+  const [rollup, setRollup] = useState<Rollup | null>(null);
+  useEffect(() => {
+    let live = true;
+    fetch(`/api/campaigns/${params.id}/rollup`)
+      .then((r) => r.json())
+      .then((d) => live && d.ok && setRollup(d))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [params.id]);
 
   const campaign = campaignById(params.id);
   if (!campaign) {
@@ -148,6 +174,87 @@ export default function CampaignDetailPage() {
           })}
         </ul>
       </div>
+
+      {/* ------- what the campaign did, beyond its posts (Phase 18) ------- */}
+      {rollup && (rollup.sends.length > 0 || rollup.flights.length > 0 || rollup.totals.exactCents > 0 || rollup.totals.conversions > 0) && (
+        <>
+          <Collapsible
+            id={`campaign.${params.id}.money`}
+            title="Money and results"
+            defaultOpen
+            summary={`${fmtMoney(rollup.totals.exactCents / 100)} spent · ${rollup.totals.conversions} results${rollup.totals.revenueCents > 0 ? ` · ${fmtMoney(rollup.totals.revenueCents / 100)} back` : ''}`}
+          >
+            <div style={{ overflowX: 'auto' }}>
+              <table className="table">
+                <thead>
+                  <tr><th>Channel</th><th className="num">Spent</th><th className="num">Estimated</th><th className="num">Results</th><th className="num">Revenue</th><th className="num">Cost / result</th></tr>
+                </thead>
+                <tbody>
+                  {rollup.costs.map((c) => (
+                    <tr key={c.channel}>
+                      <td>{CHANNEL_META[c.channel as keyof typeof CHANNEL_META]?.label ?? c.channel}</td>
+                      <td className="num">{c.exactCents > 0 ? fmtMoney(c.exactCents / 100) : '—'}</td>
+                      <td className="num" style={{ color: 'var(--muted)', fontStyle: c.estimatedCents ? 'italic' : undefined }}>
+                        {c.estimatedCents > 0 ? `~${fmtMoney(c.estimatedCents / 100)}` : '—'}
+                      </td>
+                      <td className="num">{c.conversions || '—'}</td>
+                      <td className="num">{c.revenueCents > 0 ? fmtMoney(c.revenueCents / 100) : '—'}</td>
+                      <td className="num" title="Exact spend over measured results on this channel. Channels are never averaged together.">
+                        {c.costPerResultCents != null ? fmtMoney(c.costPerResultCents / 100) : '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Collapsible>
+
+          {rollup.sends.length > 0 && (
+            <Collapsible
+              id={`campaign.${params.id}.sends`}
+              title="Messages sent"
+              defaultOpen={false}
+              summary={`${rollup.sends.length} ${rollup.sends.length === 1 ? 'send' : 'sends'}`}
+            >
+              <ul className="list">
+                {rollup.sends.map((b) => (
+                  <li key={b.id} style={{ display: 'flex', gap: 10, alignItems: 'baseline', flexWrap: 'wrap' }}>
+                    <ChannelIcon channel={b.channel as never} size={14} />
+                    <strong>{b.subject ?? b.preview}</strong>
+                    <span style={{ fontSize: 12, color: 'var(--ink-2)' }}>
+                      {b.delivered} of {b.total} delivered{b.opened > 0 ? `, ${b.opened} opened` : ''} · {fmtShort(b.sentAt.slice(0, 10))}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </Collapsible>
+          )}
+
+          {rollup.flights.length > 0 && (
+            <Collapsible
+              id={`campaign.${params.id}.flights`}
+              title="Ad flights"
+              defaultOpen={false}
+              summary={`${rollup.flights.length} ${rollup.flights.length === 1 ? 'flight' : 'flights'}`}
+            >
+              <ul className="list">
+                {rollup.flights.map((f) => (
+                  <li key={f.id} style={{ display: 'flex', gap: 10, alignItems: 'baseline', flexWrap: 'wrap' }}>
+                    <ChannelIcon channel={f.channel as never} size={14} />
+                    <strong>{fmtMoney(f.dailyCents / 100)}/day × {f.days}</strong>
+                    <span className="chip">{f.status.replace('_', ' ')}</span>
+                    <span style={{ fontSize: 12, color: 'var(--ink-2)' }}>
+                      {f.results.conversions > 0
+                        ? `${f.results.conversions} results${f.results.costPerResultCents != null ? ` · ${f.results.certainty === 'estimated' ? '~' : ''}${fmtMoney(f.results.costPerResultCents / 100)} each` : ''}`
+                        : 'no measured results yet'}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </Collapsible>
+          )}
+        </>
+      )}
 
       {selected && <VariationEditor variationId={selected} onClose={() => setSelected(null)} />}
     </div>

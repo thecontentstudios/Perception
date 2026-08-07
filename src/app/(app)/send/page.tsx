@@ -35,6 +35,10 @@ export default function SendPage() {
   const { state } = useApp();
   const [mode, setMode] = useState<Mode>('email');
   const [brandId, setBrandId] = useState<string>('all');
+  // The thread that makes this send visible to per-campaign results and
+  // cost. Optional — an ad-hoc blast is legal — but the default is the
+  // question "which campaign is this for?", asked while it is cheap.
+  const [campaignId, setCampaignId] = useState<string>('');
   const [segmentId, setSegmentId] = useState<string>('all');
   const [subject, setSubject] = useState('A few slots left this month');
   const [emailBody, setEmailBody] = useState(DEFAULT_EMAIL);
@@ -129,6 +133,7 @@ export default function SendPage() {
           subject,
           contactIds: reach.contacts.map((c) => c.id),
           brandId: brandId === 'all' ? undefined : brandId,
+          campaignId: campaignId || undefined,
           linkUrl,
           acknowledgeOverBudget,
         }),
@@ -218,6 +223,20 @@ export default function SendPage() {
                     </option>
                   ))}
                 </select>
+          <select
+            className="select"
+            aria-label="Campaign"
+            value={campaignId}
+            onChange={(e) => setCampaignId(e.target.value)}
+            title="Ties this send to a campaign, so its cost and results show up there."
+          >
+            <option value="">No campaign (ad-hoc)</option>
+            {state.campaigns.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
               </label>
               <label className="field" style={{ marginBottom: 0, flex: 1, minWidth: 160 }}>
                 <span>List</span>
