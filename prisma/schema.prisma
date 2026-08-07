@@ -45,6 +45,7 @@ model Organization {
   sessions       Session[]
   spend          SpendEntry[]
   budgets        Budget[]
+  flights        AdFlight[]
   batches        MessageBatch[]
   suppressions   Suppression[]
   consentRecords ConsentRecord[]
@@ -267,6 +268,7 @@ model Campaign {
   conversions  Conversion[]
   trackedLinks TrackedLink[]
   spend        SpendEntry[]
+  flights      AdFlight[]
 
   @@index([organizationId, brandId, status])
 }
@@ -745,10 +747,64 @@ model SpendEntry {
   /// decision rather than an inconsistency.)
   providerRef    String?
   occurredAt     DateTime     @default(now())
+  /// Set when this entry is money on an ad flight — imported mid-flight as an
+  /// estimate, flipped to exact when the invoice settles.
+  flightId       String?
+  flight         AdFlight?    @relation(fields: [flightId], references: [id])
 
   @@unique([organizationId, providerRef])
   @@index([organizationId, occurredAt])
   @@index([organizationId, channel, occurredAt])
+}
+
+/// An ad campaign planned here and bought in the platform's own tool.
+///
+/// The product's position on ads, stated as a schema: full API integration
+/// with eleven ad platforms is a year of approval queues, and pretending
+/// otherwise puts a "Launch" button on the screen that does not launch
+/// anything. What a small business actually needs is the part the platforms
+/// are bad at — deciding how much to spend, on what, saying what it will buy
+/// at posted rates, and keeping the money honest in one ledger afterwards.
+/// The buy itself happens in the platform's own ads manager, from a brief we
+/// write, and the screen says so in words.
+model AdFlight {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  brandId        String?
+  campaignId     String?
+  campaign       Campaign?    @relation(fields: [campaignId], references: [id])
+  channel        Channel
+  /// planned | handed_off | settled | cancelled. Money states, not delivery
+  /// states — what the platform did with the ad is its own reporting.
+  status         String       @default("planned")
+  /// In the owner's words: what this flight is supposed to cause.
+  objective      String
+  /// Who it should reach, as a sentence the platform's targeting UI can be
+  /// driven from. Structured targeting fields would imply we set them.
+  audience       String
+  headline       String?
+  body           String
+  /// Where a click lands, already carrying its UTM parameters, so what the
+  /// flight causes is attributable when it arrives.
+  destinationUrl String
+  dailyCents     Int
+  days           Int
+  /// What the budget buys at the platform's posted rates. A range, never a
+  /// point — the spend is exact, the outcome is the estimate.
+  estImpressionsLow  Int
+  estImpressionsHigh Int
+  createdAt      DateTime     @default(now())
+  handedOffAt    DateTime?
+  settledAt      DateTime?
+  /// The invoice total, once known. Until then the ledger rows carry the
+  /// running estimate.
+  settledCents   Int?
+
+  spend SpendEntry[]
+
+  @@index([organizationId, status])
+  @@index([organizationId, createdAt])
 }
 
 /// A monthly ceiling the owner sets, and what happens when it is reached.

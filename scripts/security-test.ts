@@ -1415,6 +1415,139 @@ async function main() {
     }
   }
 
+  console.log('\n== Ads: planned here, bought there, and the books stay honest ==');
+  {
+    // Phase 12's acceptance. The product does not place ad buys — a "Launch"
+    // button wired to nothing would be the ledger lie of Phase 7 at a hundred
+    // times the price. What must work instead: a planned flight produces a
+    // brief an owner can execute in the platform's own tool, spend imported
+    // mid-flight lands in the ledger as an estimate, and the invoice settles
+    // it to exact — with the difference carried as its own visible row.
+    const user = await db.user.findFirst({ where: { passwordHash: { not: null } } });
+    if (!user) {
+      bad('no seeded user for the flights section');
+    } else {
+      const login = await fetch(`${BASE}/api/auth/login`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: user.email, password: process.env.SEED_PASSWORD || 'demo-password-change-me' }),
+      });
+      const cookie = login.headers.get('set-cookie')?.split(';')[0] ?? '';
+      const auth = { cookie, 'content-type': 'application/json' };
+      const orgId = (await db.membership.findFirst({ where: { userId: user.id } }))?.organizationId ?? '';
+
+      // Below the platform's posted daily floor → refused with the reason.
+      const tooSmall = await fetch(`${BASE}/api/flights`, {
+        method: 'POST', headers: auth,
+        body: JSON.stringify({
+          channel: 'tiktok', dailyCents: 500, days: 14,
+          objective: 'x', audience: 'y', body: 'z', destinationUrl: 'https://summitlocal.test/offer',
+        }),
+      });
+      const tooSmallBody = await tooSmall.json();
+      tooSmall.status === 422 && /learning phase/.test(tooSmallBody.problems?.[0]?.message ?? '')
+        ? ok('a budget below the platform floor is refused, with the reason in words')
+        : bad(`under-floor plan: ${tooSmall.status} ${JSON.stringify(tooSmallBody).slice(0, 120)}`);
+
+      // A real plan.
+      const planned = await fetch(`${BASE}/api/flights`, {
+        method: 'POST', headers: auth,
+        body: JSON.stringify({
+          channel: 'facebook', dailyCents: 1500, days: 14,
+          objective: 'Fill the last two crew slots for spring cleanups',
+          audience: 'Homeowners within 15 miles, 30+',
+          headline: 'Spring cleanup, booked in two minutes',
+          body: 'Flat quotes, no site visit needed. Book online.',
+          destinationUrl: 'https://summitlocal.test/spring',
+        }),
+      }).then((r) => r.json());
+
+      planned.ok ? ok('a flight is planned') : bad(`plan failed: ${JSON.stringify(planned).slice(0, 150)}`);
+      const flightId = planned.flight?.id as string;
+
+      // The estimate is a range, and the spend is a point. Never the reverse.
+      planned.estimate?.low > 0 && planned.estimate?.high > planned.estimate?.low
+        ? ok(`what it buys is a range (${planned.estimate.low.toLocaleString()}\u2013${planned.estimate.high.toLocaleString()} ${planned.estimate.unit})`)
+        : bad(`estimate is not a range: ${JSON.stringify(planned.estimate)}`);
+
+      // The brief: executable, attributed, and honest about who places the buy.
+      const brief = planned.brief;
+      /\$15\.00\/day for 14 days/.test(brief?.text ?? '')
+        ? ok('the brief states the budget as the owner will enter it')
+        : bad('brief does not state the daily budget');
+      /utm_source=facebook/.test(brief?.text ?? '') && /utm_medium=paid/.test(brief?.text ?? '')
+        ? ok('the destination in the brief already carries its attribution')
+        : bad('brief destination has no UTMs');
+      /we do not launch ads on your behalf/i.test(brief?.statement ?? '')
+        ? ok('and the position is stated: we plan, you place the buy')
+        : bad(`statement reads: ${brief?.statement}`);
+      brief?.platform?.url?.startsWith('https://adsmanager.facebook.com')
+        ? ok('the handoff points at the real ads manager')
+        : bad(`platform url: ${brief?.platform?.url}`);
+
+      // Mid-flight spend → estimated, idempotently per period.
+      const spend1 = await fetch(`${BASE}/api/flights/${flightId}`, {
+        method: 'POST', headers: auth,
+        body: JSON.stringify({ action: 'spend', cents: 4200, period: '2026-08' }),
+      }).then((r) => r.json());
+      spend1.ok ? ok('platform-reported spend recorded') : bad(`spend failed: ${JSON.stringify(spend1)}`);
+
+      await fetch(`${BASE}/api/flights/${flightId}`, {
+        method: 'POST', headers: auth,
+        body: JSON.stringify({ action: 'spend', cents: 4700, period: '2026-08' }),
+      });
+      const estRows = await db.spendEntry.findMany({ where: { flightId } });
+      estRows.length === 1 && estRows[0].cents === 4700 && estRows[0].certainty === 'estimated'
+        ? ok('re-importing the same period updates the estimate instead of double-counting (one row, 4700\u00a2)')
+        : bad(`expected one estimated row at 4700\u00a2, got ${estRows.map((r) => `${r.cents}/${r.certainty}`).join(', ')}`);
+
+      // The ledger reports it as an estimate, not as money that moved.
+      const view = await fetch(`${BASE}/api/spend`, { headers: { cookie } }).then((r) => r.json());
+      view.estimatedCents >= 4700
+        ? ok(`/spend carries the estimate (${view.estimatedCents}\u00a2), apart from charged`)
+        : bad(`estimatedCents is ${view.estimatedCents}`);
+      const adEntry = view.entries.find((e: { certainty: string; kind: string }) => e.kind === 'ad' && e.certainty === 'estimated');
+      adEntry ? ok('the entry itself says estimated') : bad('no estimated ad entry in the ledger view');
+
+      // The invoice arrives: 5150\u00a2 against a 4700\u00a2 running estimate.
+      const settled = await fetch(`${BASE}/api/flights/${flightId}`, {
+        method: 'POST', headers: auth,
+        body: JSON.stringify({ action: 'settle', invoiceCents: 5150 }),
+      }).then((r) => r.json());
+      settled.ok && settled.adjustmentCents === 450
+        ? ok('settling writes the difference as its own row (+450\u00a2), not a rewrite')
+        : bad(`settle: ${JSON.stringify(settled)}`);
+
+      const after = await db.spendEntry.findMany({ where: { flightId } });
+      after.every((r) => r.certainty === 'exact')
+        ? ok('every flight row is exact after settling — the estimate bucket drains')
+        : bad('estimated rows survived settling');
+      after.reduce((a, b) => a + b.cents, 0) === 5150
+        ? ok('and the rows sum to the invoice')
+        : bad(`rows sum to ${after.reduce((a, b) => a + b.cents, 0)}, invoice was 5150`);
+
+      const lateSpend = await fetch(`${BASE}/api/flights/${flightId}`, {
+        method: 'POST', headers: auth,
+        body: JSON.stringify({ action: 'spend', cents: 100, period: '2026-09' }),
+      });
+      lateSpend.status === 422
+        ? ok('spend after settlement is refused — the invoice is the record now')
+        : bad(`post-settlement spend gave ${lateSpend.status}`);
+
+      // Tenant scoping: a flight id is not probeable from outside its org.
+      const anon = await fetch(`${BASE}/api/flights/${flightId}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'handoff' }),
+      });
+      anon.status === 401 || anon.status === 403
+        ? ok('an anonymous caller cannot touch a flight')
+        : bad(`anonymous flight action gave ${anon.status}`);
+
+      // Cleanup.
+      await db.spendEntry.deleteMany({ where: { flightId } });
+      await db.adFlight.deleteMany({ where: { organizationId: orgId } });
+    }
+  }
+
   console.log('\n== The reporting knows what it knows ==');
   {
     // The correction at the centre of Phase 11. For two phases `/analytics`

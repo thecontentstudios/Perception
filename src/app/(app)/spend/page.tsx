@@ -24,6 +24,20 @@ import type { Channel } from '@/lib/types';
 
 const PLANNABLE = Object.keys(AD_RATES) as Channel[];
 
+interface FlightRow {
+  id: string;
+  channel: string;
+  status: string;
+  objective: string;
+  dailyCents: number;
+  days: number;
+  estImpressionsLow: number;
+  estImpressionsHigh: number;
+  estimatedCents: number;
+  exactCents: number;
+  settledCents: number | null;
+}
+
 interface Ledger {
   chargedCents: number;
   committedCents: number;
@@ -51,6 +65,71 @@ export default function SpendPage() {
    */
   const [ledger, setLedger] = useState<Ledger | null>(null);
   const [ledgerError, setLedgerError] = useState<string | null>(null);
+
+  /**
+   * Flights that exist, as opposed to plans being sketched above.
+   *
+   * The planner rows are arithmetic — free to add, change and delete. A
+   * flight is a decision: it has a brief, a status, and money attached to it.
+   * The two are kept visually and mechanically separate so the step from
+   * "what would this cost" to "we are doing this" is a deliberate click.
+   */
+  const [flights, setFlights] = useState<FlightRow[]>([]);
+  const [brief, setBrief] = useState<{ id: string; platform: { name: string; url: string }; text: string; statement: string } | null>(null);
+  const [flightMsg, setFlightMsg] = useState<string | null>(null);
+
+  const loadFlights = () =>
+    fetch('/api/flights')
+      .then((r) => r.json())
+      .then((d) => d.ok && setFlights(d.flights))
+      .catch(() => {});
+  useEffect(() => {
+    void loadFlights();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const commitPlan = async (plan: AdPlan) => {
+    setFlightMsg(null);
+    // The destination is the one field that cannot be a placeholder: it
+    // carries the UTM parameters that credit results back, and a brief with
+    // a dummy URL produces a flight whose conversions belong to nobody.
+    const destinationUrl = window.prompt('Where should a click land? (your page for this offer)', 'https://');
+    if (!destinationUrl) return;
+    const objective = window.prompt('What should this flight cause?', 'Bring in local customers') ?? 'Bring in local customers';
+    const audience = window.prompt('Who should it reach?', 'People near the business, 25 and up') ?? 'People near the business, 25 and up';
+    const r = await fetch('/api/flights', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        channel: plan.channel,
+        dailyCents: plan.dailyBudgetCents,
+        days: plan.days,
+        objective,
+        audience,
+        body: 'Draft the ad text in the composer, or write it in the ads manager — the brief carries everything else.',
+        destinationUrl,
+      }),
+    }).then((x) => x.json());
+    if (!r.ok) {
+      setFlightMsg(r.problems?.[0]?.message ?? r.reason ?? 'Could not plan the flight.');
+      return;
+    }
+    setBrief({ id: r.flight.id, ...r.brief });
+    void loadFlights();
+  };
+
+  const act = async (id: string, payload: Record<string, unknown>) => {
+    setFlightMsg(null);
+    const r = await fetch(`/api/flights/${id}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).then((x) => x.json());
+    if (!r.ok) setFlightMsg(r.reason ?? 'That did not work.');
+    if (r.brief) setBrief({ id, ...r.brief });
+    void loadFlights();
+    return r;
+  };
 
   useEffect(() => {
     let live = true;
@@ -247,6 +326,14 @@ export default function SpendPage() {
                       </option>
                     ))}
                   </select>
+                  <button
+                    type="button"
+                    className="btn"
+                    style={{ marginLeft: 'auto' }}
+                    onClick={() => void commitPlan(p)}
+                  >
+                    Plan this flight
+                  </button>
                   {plans.length > 1 && (
                     <button
                       type="button"
@@ -342,6 +429,114 @@ export default function SpendPage() {
           </p>
         ))}
       </div>
+
+      {/* ------------------------------------------------------- flights */}
+      {(flights.length > 0 || brief || flightMsg) && (
+        <div className="card card-pad" style={{ marginBottom: 14 }} data-testid="flights-panel">
+          <h2 style={{ marginTop: 0 }}>Flights</h2>
+          <p className="sub" style={{ maxWidth: '70ch' }}>
+            Perception plans the flight and keeps the books. The buy happens in the platform&rsquo;s own ads
+            manager, from the brief — we do not launch ads on your behalf. Spend you enter mid-flight is an
+            estimate until the invoice settles it.
+          </p>
+          {flightMsg && <div className="notice warn" style={{ marginBottom: 10 }}>{flightMsg}</div>}
+
+          {flights.length > 0 && (
+            <div style={{ overflowX: 'auto' }}>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Channel</th>
+                    <th>Status</th>
+                    <th className="num">Budget</th>
+                    <th className="num">Should buy</th>
+                    <th className="num">Estimated</th>
+                    <th className="num">Settled</th>
+                    <th aria-label="actions" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {flights.map((f) => (
+                    <tr key={f.id}>
+                      <td>{CHANNEL_META[f.channel as Channel]?.label ?? f.channel}</td>
+                      <td>
+                        <span className={`chip ${f.status === 'settled' ? 'good' : ''}`}>
+                          {f.status.replace('_', ' ')}
+                        </span>
+                      </td>
+                      <td className="num">
+                        {money(f.dailyCents)}/day × {f.days}
+                      </td>
+                      <td className="num">
+                        {f.estImpressionsLow.toLocaleString('en-US')}–{f.estImpressionsHigh.toLocaleString('en-US')}
+                      </td>
+                      <td className="num" style={{ color: 'var(--muted)', fontStyle: f.estimatedCents ? 'italic' : undefined }}>
+                        {f.estimatedCents ? `~${amount(f.estimatedCents)}` : '—'}
+                      </td>
+                      <td className="num">{f.settledCents != null ? amount(f.settledCents) : f.exactCents ? amount(f.exactCents) : '—'}</td>
+                      <td>
+                        <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                          <button type="button" className="btn ghost" onClick={() => void act(f.id, { action: 'handoff' })}>
+                            Brief
+                          </button>
+                          {f.status !== 'settled' && (
+                            <>
+                              <button
+                                type="button"
+                                className="btn ghost"
+                                onClick={() => {
+                                  const v = window.prompt('Spend the platform reports so far, in dollars:');
+                                  if (v == null) return;
+                                  const period = new Date().toISOString().slice(0, 10);
+                                  void act(f.id, { action: 'spend', cents: Math.round(Number(v) * 100), period });
+                                }}
+                              >
+                                Enter spend
+                              </button>
+                              <button
+                                type="button"
+                                className="btn ghost"
+                                onClick={() => {
+                                  const v = window.prompt('Invoice total, in dollars:');
+                                  if (v == null) return;
+                                  void act(f.id, { action: 'settle', invoiceCents: Math.round(Number(v) * 100) });
+                                }}
+                              >
+                                Settle
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {brief && (
+            <div className="card card-pad" style={{ marginTop: 12, background: 'var(--surface-2, var(--bg))' }} data-testid="flight-brief">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <strong>The brief</strong>
+                {brief.platform.url && (
+                  <a className="btn" href={brief.platform.url} target="_blank" rel="noreferrer">
+                    Open {brief.platform.name}
+                  </a>
+                )}
+                <button type="button" className="btn ghost" onClick={() => void navigator.clipboard.writeText(brief.text)}>
+                  Copy brief
+                </button>
+                <button type="button" className="btn ghost" onClick={() => setBrief(null)} aria-label="Close brief">
+                  ✕
+                </button>
+              </div>
+              <p className="sub" style={{ margin: '8px 0' }}>{brief.statement}</p>
+              <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12.5, lineHeight: 1.5, margin: 0, fontFamily: 'inherit' }}>{brief.text}</pre>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ------------------------------------------------------ rate card */}
       <div className="card card-pad">

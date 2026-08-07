@@ -136,7 +136,10 @@ export interface SpendSplit {
 export async function spendSplit(organizationId: string, monthStart: Date, monthEnd: Date): Promise<SpendSplit> {
   const [charged, emailQueued, smsQueued] = await Promise.all([
     db.spendEntry.aggregate({
-      where: { organizationId, occurredAt: { gte: monthStart, lt: monthEnd } },
+      // Exact only. Estimated rows are ad spend read off a platform dashboard
+      // mid-flight — a belief about money, not money. Counting them here would
+      // report them as charged, which is the Phase 7 lie with a new costume.
+      where: { organizationId, occurredAt: { gte: monthStart, lt: monthEnd }, certainty: 'exact' },
       _sum: { cents: true },
     }),
     db.emailDelivery.aggregate({

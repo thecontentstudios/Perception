@@ -1414,3 +1414,62 @@ Francisco does not silence 6pm in Honolulu, a list that is entirely asleep is
 refused with its next opening, and an unguessable number stays held to the
 most restrictive window.
 
+---
+
+## Phase 12 (first half) — Ads: planned here, bought there
+
+The plan's own words: **take the honest position.** Full API integration with
+eleven ad platforms is a year of work, most of it approval queues, and a
+"Launch" button wired to none of it would be the Phase 7 ledger lie at a
+hundred times the price. What a small business needs is the part the platforms
+are bad at: deciding how much to spend on what, being told what that buys *as
+a range*, getting a brief they can execute in the platform's own tool, and
+having the money land in the same ledger as every other channel.
+
+### 12.1 — The flight (`src/lib/flights.ts`, `AdFlight`)
+
+A flight has **money states, not delivery states**: `planned` → `handed_off`
+→ `settled`. What the platform did with the ad is its own reporting; what we
+keep is the books.
+
+Planning validates against the platform's posted daily floor — below it, an
+auction platform never leaves the learning phase and the budget teaches an
+algorithm instead of reaching anyone — and prices the outcome as a range from
+the same `AD_RATES` the /spend planner uses. The spend is exact (the owner
+sets it); the outcome is the estimate. Never the reverse.
+
+### 12.2 — The brief
+
+The handoff produces a plain-text brief: objective, audience, budget stated
+the way the ads manager will ask for it ("$15.00/day for 14 days — set DAILY,
+not lifetime, with an end date"), the outcome range labelled a range, and the
+destination URL **already carrying its UTM parameters** — minted at planning
+time, because a click that arrives unattributed is a conversion the flight
+caused and can never be credited with. The deep link goes to the platform's
+real ads manager, and the position is stated in words on the screen and in
+the API: *we plan the flight and keep the books; you place the buy.*
+
+### 12.3 — Estimated money drains to exact
+
+Spend the platform reports mid-flight is written `certainty: 'estimated'`,
+idempotently per (flight, period) — re-importing a week updates the figure
+rather than double-counting it. `spendSplit`'s "charged" aggregate now
+excludes estimates, because a number read off a dashboard is a belief about
+money, not money.
+
+Settling is one transaction: every estimated row flips to exact, and the
+difference between the running estimate and the invoice becomes **its own
+adjustment row** — so the ledger sums to the invoice without any history
+being rewritten or deleted, and the estimate bucket genuinely drains. Spend
+entry after settlement is refused: the invoice is the record now.
+
+**Acceptance — met.** A planned $210 Facebook flight produces a brief with
+the budget, the attributed destination, and the ads-manager link; imported
+spend appears on /spend as an estimate, apart from charged; settling a 5150¢
+invoice against a 4700¢ estimate writes a +450¢ adjustment, every row goes
+exact, and the rows sum to the invoice.
+
+*(Second half of Phase 12 — publishers in fit order, Facebook and Instagram
+behind the `Publisher` contract against a stand-in Graph API — is the next
+iteration.)*
+

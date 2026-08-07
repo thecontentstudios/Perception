@@ -269,7 +269,7 @@ the reason on hover, distinct from "connect to see"; a deleted post is
 recorded as gone once and never asked about again — but a 404 on a post never
 read successfully is an error, not a tombstone.
 
-### Phase 12 — Widen: publishers, then ads
+### Phase 12 — Widen: publishers, then ads — **ads half done**
 
 1. Publishers in fit order, not alphabetical: Facebook and Instagram first,
    because those are what the ranking actually recommends for the industries
@@ -281,9 +281,12 @@ read successfully is an error, not a tombstone.
    for reporting. Say that plainly on the screen rather than implying we place
    the buy.
 
-**Acceptance:** a planned flight produces a brief an owner can act on in the
-platform's own tool, and the spend comes back into the ledger tagged
-`certainty: 'estimated'` until the invoice settles.
+**Acceptance — met for the ads half.** A planned flight produces a brief an
+owner can act on in the platform's own tool (budget, audience, attributed
+destination, deep link, and the stated position that we do not place the buy);
+imported spend lands tagged `certainty: 'estimated'`, kept apart from charged;
+settling flips it to exact with the invoice difference as its own adjustment
+row. Publishers in fit order (Facebook, Instagram) remain.
 
 ---
 
