@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { db, dbAvailable } from '@/lib/db';
 import { ATTRIBUTION_COOKIE } from '@/lib/tracking';
 import { isConversionKind, resolveAttribution, CONVERSION_KINDS } from '@/lib/attribution';
+import { intake, looksLikeEmail } from '@/lib/intake';
 import { rateLimit } from '@/lib/rate-limit';
 import { clientIp } from '@/lib/request';
 import { currentPrincipal } from '@/lib/auth/session';
@@ -59,6 +60,8 @@ interface EventBody {
   utmContent?: string;
   utmCampaign?: string;
   email?: string;
+  /** Optional, and only used to give a created contact something to be called. */
+  name?: string;
   occurredAt?: string;
 }
 
@@ -151,15 +154,50 @@ export async function POST(req: Request) {
     );
   }
 
-  // Match an existing contact by email when one is offered, so a conversion
-  // joins the person it belongs to. Never creates one: a form submission is
-  // not consent to be added to a marketing list.
-  const contact = body.email
+  // A conversion that carries an email becomes a contact.
+  //
+  // This used to match an existing contact and stop, with a comment saying a
+  // form submission is not consent to be added to a marketing list. That is
+  // true and it is not a reason to throw the address away — a quote request is
+  // a person raising their hand, and the whole product argues that the list
+  // you own is the most valuable thing a business has. Discarding the address
+  // meant every paid campaign spent money to produce a stranger who stayed a
+  // stranger.
+  //
+  // So it is created as **PENDING**, which `audience.ts` counts as *no*.
+  // Nobody is mailed on this basis. What it buys is a person the owner can
+  // send one confirmation to, and a closed loop from the ad that caused the
+  // click to the customer it produced.
+  let contact = body.email
     ? await db.contact.findFirst({
         where: { organizationId, email: body.email.toLowerCase().trim() },
         select: { id: true },
       })
     : null;
+
+  if (!contact && body.email && looksLikeEmail(body.email)) {
+    try {
+      const created = await intake({
+        organizationId,
+        name: body.name ?? null,
+        email: body.email,
+        source: `Conversion: ${body.kind}`,
+        consent: {
+          email: {
+            state: 'pending',
+            basis: 'conversion',
+            evidence: `Submitted a ${body.kind.replace(/_/g, ' ')} on the website. Not a subscription — held pending until they confirm.`,
+          },
+        },
+        ip: clientIp(req),
+        userAgent: req.headers.get('user-agent'),
+      });
+      contact = { id: created.contactId };
+    } catch {
+      // A conversion is worth recording even when the contact cannot be. An
+      // unattributed quote request is still a real quote request.
+    }
+  }
 
   const variation = attribution.variationId
     ? await db.channelVariation.findUnique({

@@ -39,6 +39,7 @@ const ALIASES: Record<string, string> = {
   '/discover': 'website analyze suggestions ideas',
   '/inbox': 'messages comments replies dms',
   '/contacts': 'people customers audience list',
+  '/grow': 'import csv signup form subscribe opt-in consent double opt-in grow list add contacts',
   '/media': 'photos videos assets library uploads',
   '/analytics': 'results reports leads revenue numbers',
   '/learned': 'insights what works patterns',

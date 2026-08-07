@@ -17,6 +17,8 @@ import { allocateCents } from '../src/lib/billing';
 import { signResendWebhook, verifyResendSignature } from '../src/lib/senders/resend';
 import { renderEmail, renderSubject } from '../src/lib/senders/render';
 import { fillMergeFields } from '../src/lib/sms';
+import { findNameParts, guessMapping, parseCsv } from '../src/lib/csv';
+import { looksLikeEmail, normalizePhone } from '../src/lib/intake';
 import { ACCOUNTS, BRANDS, CONTACTS } from '../src/lib/demo-data';
 import type { Contact as ContactShape } from '../src/lib/types';
 
@@ -433,6 +435,56 @@ console.log('\n== Rendering: what the recipient actually gets ==');
   !nasty.html.includes('<script>') && nasty.html.includes('&lt;script&gt;')
     ? ok('a contact name is escaped before it reaches the html')
     : bad('html injection through a contact name');
+}
+
+console.log('\n== Reading the spreadsheet a business actually has ==');
+{
+  // Every one of these silently produces wrong data with a naive split(',').
+  const messy =
+    '\ufeffFull Name,Email Address,Mobile\r\n' +
+    '"Smith, John",john@example.com,(973) 555-0142\r\n' +
+    '"He said ""hi""",b@example.com,+1 973 555 0143\r\n' +
+    '"Multi\nline",c@example.com,\r\n' +
+    '\r\n';
+  const p = parseCsv(messy);
+
+  eq(p.headers, ['Full Name', 'Email Address', 'Mobile'], 'a BOM does not corrupt the first header');
+  eq(p.rows.length, 3, 'a trailing blank line is not a contact');
+  eq(p.rows[0][0], 'Smith, John', 'a quoted comma stays in one cell');
+  eq(p.rows[1][0], 'He said "hi"', 'doubled quotes become one');
+  eq(p.rows[2][0], 'Multi\nline', 'a newline inside quotes does not end the row');
+  p.rows.every((r) => !r.some((v) => v.includes('\r')))
+    ? ok('no carriage returns survive into the values')
+    : bad('a \\r leaked into a value');
+  eq(p.ragged.length, 0, 'no rows are reported ragged');
+
+  // Column guessing, including the shapes booking software exports.
+  eq(guessMapping(['Full Name', 'Email Address', 'Mobile']), ['name', 'email', 'phone'], 'human headers are matched');
+  eq(guessMapping(['first_name', 'last_name', 'email_address']), ['name', 'ignore', 'email'], 'snake_case is matched too');
+  eq(findNameParts(['first_name', 'last_name', 'email']), { first: 0, last: 1 }, 'split name columns are found');
+  eq(findNameParts(['name', 'email']), null, 'and not invented when absent');
+  eq(guessMapping(['Notes', 'Amount']), ['ignore', 'ignore'], 'unrecognised columns are left alone');
+
+  // A ragged row is reported rather than silently misaligned.
+  const bad1 = parseCsv('a,b,c\n1,2\n');
+  eq(bad1.ragged.length, 1, 'a row with too few columns is flagged');
+}
+
+console.log('\n== Normalising what people type ==');
+{
+  eq(normalizePhone('(973) 555-0142'), '+19735550142', 'US formatting becomes E.164');
+  eq(normalizePhone('973-555-0142'), '+19735550142', 'dashes too');
+  eq(normalizePhone('+44 20 7946 0958'), '+442079460958', 'an international number keeps its country code');
+  // A number we cannot place is left alone rather than guessed at: a wrong
+  // country code produces a number that dials somebody else.
+  eq(normalizePhone('12345'), '12345', 'an unplaceable number is left as typed');
+
+  looksLikeEmail('a@b.co') ? ok('a minimal address passes') : bad('rejected a valid address');
+  !looksLikeEmail('not-an-email') ? ok('no @ is rejected') : bad('accepted a string with no @');
+  !looksLikeEmail('a@b') ? ok('no dot in the domain is rejected') : bad('accepted a bare hostname');
+  !looksLikeEmail('a@b.co, c@d.co') ? ok('two addresses in one cell are rejected') : bad('accepted two addresses');
+  !looksLikeEmail('John Smith') ? ok('a name in the email column is rejected') : bad('accepted a name');
+  !looksLikeEmail('a@@b.co') ? ok('a double @ is rejected') : bad('accepted a double @');
 }
 
 console.log('\n== Allocating a total across messages ==');

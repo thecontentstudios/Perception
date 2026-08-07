@@ -148,7 +148,7 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
   // scrollbar on every screen.
   for (const [w, h] of [[1920, 1080], [1280, 900], [900, 800], [760, 900], [600, 800]]) {
     await page.setViewportSize({ width: w, height: h });
-    for (const route of ['/hud', '/calendar', '/analytics', '/contacts', '/media', '/send', '/spend', '/advertise']) {
+    for (const route of ['/hud', '/calendar', '/analytics', '/contacts', '/media', '/send', '/spend', '/advertise', '/grow']) {
       await page.goto('http://localhost:3000' + route, { waitUntil: 'networkidle' });
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 2);
       overflow ? bad(`horizontal overflow on ${route} at ${w}px`) : ok(`no overflow ${route} @ ${w}px`);

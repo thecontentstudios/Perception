@@ -57,13 +57,13 @@ client in the repository.
 The composer reports *"Queued for 1,110 people — free charged."* Nothing was
 queued anywhere but our own table, and nothing will ever pick it up.
 
-### 2. Nothing in the product creates a contact
+### 2. Nothing in the product creates a contact — **fixed in Phase 9**
 
-`contact.create` appears exactly once in the codebase: in `prisma/seed.ts`.
+`contact.create` appeared exactly once in the codebase: in `prisma/seed.ts`.
 
-There is no CSV import (the button on `/contacts` has no handler), no signup
-form, no opt-in capture, no path from a conversion to a contact record, and no
-double opt-in for SMS consent.
+There are now three ways in — a hosted or embedded signup form, a CSV import
+with a preview, and website conversions — all through one `intake()` function
+that refuses to mark anybody subscribed without a recorded basis.
 
 ### 3. Metrics are seeded, never ingested
 
@@ -189,7 +189,7 @@ real protocol and the stand-in enforces the same contract — bearer auth,
 idempotency keys, the `{ id }` response, Svix-signed webhooks — so what remains
 untested is the account, not the code.
 
-### Phase 9 — Grow the list *(the missing half of our own advice)*
+### Phase 9 — Grow the list — **done**
 
 1. **CSV import** with explicit consent capture per row, a dry-run preview
    showing how many are actually reachable, and a hard refusal to mark anyone
@@ -202,9 +202,12 @@ untested is the account, not the code.
 4. **Double opt-in** for SMS, because `PENDING` correctly counts as *no* and the
    only way out of `PENDING` is a confirmation we do not currently send.
 
-**Acceptance:** a form submission on the mock site creates a pending contact; a
-confirmation click promotes it to subscribed; the reach figure on `/advertise`
-increases by one and the projected cost of the next send rises accordingly.
+**Acceptance — met.** A form submission with no session creates a pending
+contact carrying the exact sentence it agreed to; a real confirmation email
+goes out through the Phase 8 adapter; clicking its link promotes the contact to
+subscribed and the reachable audience grows by exactly one. A CSV import
+previews before writing, refuses `SUBSCRIBED` without a stated basis, and a
+website quote request now becomes a pending contact instead of being discarded.
 
 ### Phase 10 — Text messages that actually arrive
 

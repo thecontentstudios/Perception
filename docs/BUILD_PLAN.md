@@ -1052,3 +1052,101 @@ describe the unconfigured world silently started describing the configured one.
 running (now a failure, not a skip, when `MOCK_RESEND_URL` is set), and once
 when a lookup scoped to `status: 'SENT'` found nothing because every message in
 that section had already been bounced.
+
+---
+
+## Phase 9 — Grow the list
+
+The capability audit's second finding: **the product's headline advice is for a
+list it cannot help you build.** `/advertise` opens with "start here: email your
+list", `routes.ts` says the owned audience "only grows if something else feeds
+it", and nothing fed it — `contact.create` appeared once in the whole codebase,
+in the seed. The ranking argument is correct, which is exactly what made list
+growth the highest-leverage missing feature rather than a nice-to-have.
+
+### 9.1 — One door, one rule (`src/lib/intake.ts`)
+
+Three ways in — a form, a spreadsheet, a website conversion — and one function
+they all go through, because three similar code paths is three places for the
+rule to be wrong. The rule:
+
+**Nothing becomes `SUBSCRIBED` without a recorded basis.**
+
+Consent is an **event log**, not a flag. The flag on `Contact` is the current
+answer; `ConsentRecord` rows are how it got that way, including the exact
+sentence the person was shown — copied, not referenced, so editing a form later
+cannot rewrite what somebody read.
+
+Deduplication is by normalised address within an organization. The same person
+arrives repeatedly, and each arrival should strengthen what we know rather than
+create a second row that halves it. Consent only ever moves one way on its own:
+an unsubscribe always wins, and a re-uploaded CSV cannot quietly demote someone
+who confirmed.
+
+### 9.2 — Reading the file a business actually has (`src/lib/csv.ts`)
+
+"CSV" is a family of nearly-compatible formats, and every difference breaks a
+naive `split(',')` *silently*: a BOM makes the first header match nothing,
+`"Smith, John"` becomes two cells, CRLF leaves `\r` on every last value, a
+trailing newline becomes a row of empty contacts. None of those error — they
+produce a plausible import with wrong data, which the owner discovers when a
+customer receives mail addressed to `"Smith`.
+
+### 9.3 — The import refuses
+
+Two steps, always: a dry run that reports exactly what would happen, then a
+separate commit. An import is close to impossible to undo, so the shape of the
+interaction matches the shape of the risk.
+
+And it will not mark anyone subscribed unless the caller says how they agreed,
+in words. An owner who bought a list can still type something and mail it — the
+difference is that the sentence is stored beside every address it created, so
+when a mailbox provider asks, there is an answer that is not "it was in a CSV".
+
+A phone number in a spreadsheet is **never** SMS consent, whatever is attested
+about email. Texting on that basis is $500–$1,500 a message.
+
+### 9.4 — Double opt-in, on by default (`src/lib/confirm.ts`)
+
+`PENDING` was a state nothing could leave: a form could collect a hundred
+addresses and the reachable count would never move, because the only thing that
+promotes a pending contact is a confirmation the product never sent. It sends
+one now, through the same `Sender` the campaigns use — so with no provider
+configured it says so rather than leaving the owner believing sign-ups are on
+their way.
+
+A single-opt-in list is bigger and delivers worse: it fills with typos and with
+addresses whose owners never asked, both of which bounce, and bounces are what
+mailbox providers score a sender on. The list that looks smaller reaches more
+people, and that argument loses to a bigger dashboard number unless the product
+takes a position.
+
+### 9.5 — Conversions become contacts
+
+`/api/events` used to match an existing contact by email and stop, with a
+comment explaining that a form submission is not consent to be added to a
+marketing list. True — and not a reason to throw the address away. Every paid
+campaign was spending money to produce a stranger who stayed a stranger.
+
+They are created as `PENDING`, which counts as *no*. Nobody is mailed on that
+basis. What it buys is a person the owner can send one confirmation to, and a
+closed loop from the ad that caused the click to the customer it produced.
+
+### What the tests caught
+
+**The hosted signup form rendered inside the admin shell.** `/f/<slug>` is
+shown to somebody else's customers, and it inherited the root layout — so it
+carried the navigation rail and a dropdown naming every business in the
+workspace. Fixed by moving the application into an `(app)` route group with its
+own layout, leaving the root layout as a bare document. No URL changed. The
+test now asserts that no brand name and no nav markup appears on a public page.
+
+**A superseded confirmation link.** The test signed up twice — deliberately, to
+check the form is not an account-existence oracle — then read the token out of
+the *first* email, which minting the second had invalidated. The behaviour was
+right and the test was wrong; it now reads the latest email and separately
+asserts the earlier link is dead.
+
+**The worker suite was passing by skipping**, again: mock Mastodon had died
+between runs, so it reported success having run nothing. Counted per suite
+rather than trusting the aggregate.

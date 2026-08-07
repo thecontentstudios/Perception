@@ -79,6 +79,9 @@ async function main() {
       ['/api/send', { method: 'POST', body: JSON.stringify({ channel: 'email', subject: 'x', body: 'y' }) }],
       ['/api/send', { method: 'POST', body: JSON.stringify({ channel: 'email', subject: 'x', body: 'y', dryRun: true }) }],
       ['/api/spend', { method: 'PUT', body: JSON.stringify({ capCents: 999999, hardStop: false }) }],
+      // Importing changes who can be mailed and what the next send costs.
+      ['/api/contacts/import', { method: 'POST', body: JSON.stringify({ csv: 'email\nx@y.com', commit: true }) }],
+      ['/api/forms', { method: 'POST', body: JSON.stringify({ name: 'x', consentText: 'a sentence long enough' }) }],
     ];
     for (const [path, init] of probes) {
       const res = await fetch(`${BASE}${path}`, {
@@ -779,6 +782,342 @@ async function main() {
         await db.emailDelivery.deleteMany({ where: { variationId: { startsWith: 'adhoc:' } } });
         await db.messageBatch.deleteMany({ where: { organizationId: orgId } });
       }
+    }
+  }
+
+  console.log('\n== Growing the list: nothing becomes subscribed without a basis ==');
+  {
+    const user = await db.user.findFirst({ where: { passwordHash: { not: null } } });
+    if (!user) {
+      console.log('  SKIP no seeded user');
+    } else {
+      const login = await fetch(`${BASE}/api/auth/login`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: user.email, password: process.env.SEED_PASSWORD || 'demo-password-change-me' }),
+      });
+      const cookie = login.headers.get('set-cookie')?.split(';')[0] ?? '';
+      const auth = { cookie, 'content-type': 'application/json' };
+      const orgId = (await db.membership.findFirst({ where: { userId: user.id } }))?.organizationId ?? '';
+      const stamp = Date.now();
+
+      const wipe = async () => {
+        const made = await db.contact.findMany({ where: { organizationId: orgId, email: { contains: `p9-${stamp}` } }, select: { id: true } });
+        const ids = made.map((c) => c.id);
+        await db.consentRecord.deleteMany({ where: { contactId: { in: ids } } });
+        await db.confirmationToken.deleteMany({ where: { contactId: { in: ids } } });
+        await db.contact.deleteMany({ where: { id: { in: ids } } });
+      };
+      await wipe();
+
+      const imp = (body: unknown) =>
+        fetch(`${BASE}/api/contacts/import`, { method: 'POST', headers: auth, body: JSON.stringify(body) })
+          .then(async (r) => ({ status: r.status, body: await r.json() }));
+
+      // A messy file, of the kind that actually turns up: BOM, quoted comma,
+      // CRLF, a duplicate, a junk address, a row with nothing usable.
+      const csv =
+        '\ufeffFull Name,Email Address,Mobile\r\n' +
+        `"Webb, Marcus",marcus.p9-${stamp}@example.com,(973) 555-0142\r\n` +
+        `Ada Okonjo,ada.p9-${stamp}@example.com,\r\n` +
+        `Duplicate Person,marcus.p9-${stamp}@example.com,\r\n` +
+        'Bad Address,not-an-email,\r\n' +
+        'Nobody,,\r\n';
+
+      // ---- the refusal that gives the model its meaning ----
+      const noBasis = await imp({ csv, consentState: 'subscribed', commit: true });
+      noBasis.status === 422 && /how they agreed|say how/i.test(noBasis.body.reason ?? '')
+        ? ok('importing as subscribed without saying how is refused')
+        : bad(`no-basis import returned ${noBasis.status}: ${noBasis.body.reason}`);
+
+      // ---- preview writes nothing ----
+      const before = await db.contact.count({ where: { organizationId: orgId } });
+      const preview = await imp({ csv, consentState: 'pending' });
+      (await db.contact.count({ where: { organizationId: orgId } })) === before
+        ? ok('a preview writes no contacts')
+        : bad('the preview created contacts');
+      preview.body.committed === false ? ok('and says it did not commit') : bad('preview claimed to commit');
+
+      const sum = preview.body.summary;
+      sum.newContacts === 2 && sum.duplicatesInFile === 1 && sum.badEmail === 1 && sum.noAddress === 1
+        ? ok(`the file is read correctly: ${sum.newContacts} new, ${sum.duplicatesInFile} duplicate, ${sum.badEmail} unusable, ${sum.noAddress} with no address`)
+        : bad(`summary: ${JSON.stringify(sum)}`);
+      JSON.stringify(preview.body.mapping) === JSON.stringify(['name', 'email', 'phone'])
+        ? ok('and the columns are matched to fields')
+        : bad(`mapping: ${JSON.stringify(preview.body.mapping)}`);
+      preview.body.sample.some((r: { name: string }) => r.name === 'Webb, Marcus')
+        ? ok('a quoted comma stays inside one cell')
+        : bad('quoted field was split');
+
+      // ---- commit, as pending ----
+      const committed = await imp({ csv, consentState: 'pending', commit: true });
+      committed.body.created === 2 ? ok(`imported ${committed.body.created} as pending`) : bad(`created ${committed.body.created}`);
+
+      const marcus = await db.contact.findFirst({ where: { organizationId: orgId, email: `marcus.p9-${stamp}@example.com` } });
+      marcus?.emailConsent === 'PENDING' ? ok('and pending is what they are') : bad(`consent is ${marcus?.emailConsent}`);
+      marcus?.phone === '+19735550142' ? ok(`the phone number is normalised (${marcus.phone})`) : bad(`phone: ${marcus?.phone}`);
+      marcus?.smsConsent === 'PENDING'
+        ? ok('a phone number in a spreadsheet is never SMS consent')
+        : bad(`sms consent from an import: ${marcus?.smsConsent}`);
+
+      const record = await db.consentRecord.findFirst({ where: { contactId: marcus!.id, channel: 'EMAIL' } });
+      record?.basis === 'import' && (record.evidence?.length ?? 0) > 20
+        ? ok('every address carries how it got here')
+        : bad(`consent record: ${JSON.stringify(record)}`);
+
+      // Pending means pending: the audience must not include them.
+      const quote = await fetch(`${BASE}/api/send`, {
+        method: 'POST', headers: auth,
+        body: JSON.stringify({ channel: 'email', subject: 'x', body: 'y', contactIds: [marcus!.id], dryRun: true }),
+      }).then((r) => r.json());
+      quote.reach.reachable === 0
+        ? ok('an imported pending contact is not mailable')
+        : bad(`a pending contact was reachable: ${quote.reach.reachable}`);
+
+      // ---- the same file again is a merge, not a duplicate ----
+      const again = await imp({ csv, consentState: 'pending', commit: true });
+      again.body.created === 0 && again.body.merged === 2
+        ? ok('re-importing the same file creates nobody new')
+        : bad(`second import: ${again.body.created} created, ${again.body.merged} merged`);
+
+      // ---- with a stated basis, subscribed is allowed and recorded ----
+      const attested = 'Signed up on a paper form at the counter that says we email monthly offers.';
+      const sub = await imp({
+        csv: `Name,Email\nRea Lin,rea.p9-${stamp}@example.com\n`,
+        consentState: 'subscribed',
+        consentEvidence: attested,
+        commit: true,
+      });
+      sub.body.created === 1 ? ok('with a stated basis, subscribed is allowed') : bad(`attested import: ${JSON.stringify(sub.body.summary)}`);
+      const rea = await db.contact.findFirst({ where: { organizationId: orgId, email: `rea.p9-${stamp}@example.com` } });
+      const reaRecord = await db.consentRecord.findFirst({ where: { contactId: rea!.id, channel: 'EMAIL' } });
+      rea?.emailConsent === 'SUBSCRIBED' && reaRecord?.evidence === attested
+        ? ok('and the owner\u2019s own words are stored beside the address')
+        : bad(`attested record: ${reaRecord?.evidence}`);
+
+      await wipe();
+    }
+  }
+
+  console.log('\n== A signup form, and the confirmation that makes it count ==');
+  {
+    const user = await db.user.findFirst({ where: { passwordHash: { not: null } } });
+    const MOCK = process.env.MOCK_RESEND_URL || 'http://localhost:4323';
+    const mockUp = await fetch(`${MOCK}/__messages`).then((r) => r.ok).catch(() => false);
+
+    if (!user) {
+      console.log('  SKIP no seeded user');
+    } else {
+      const login = await fetch(`${BASE}/api/auth/login`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: user.email, password: process.env.SEED_PASSWORD || 'demo-password-change-me' }),
+      });
+      const cookie = login.headers.get('set-cookie')?.split(';')[0] ?? '';
+      const auth = { cookie, 'content-type': 'application/json' };
+      const orgId = (await db.membership.findFirst({ where: { userId: user.id } }))?.organizationId ?? '';
+      const stamp = Date.now();
+      const address = `signup-${stamp}@example.com`;
+
+      // A form that asks for a phone but has no SMS wording is refused: an
+      // email opt-in is not permission to text, and the gap is $500-$1,500 a
+      // message.
+      const noSms = await fetch(`${BASE}/api/forms`, {
+        method: 'POST', headers: auth,
+        body: JSON.stringify({ name: 'Bad form', consentText: 'Email me things please', askPhone: true }),
+      });
+      noSms.status === 422
+        ? ok('a form asking for a phone number needs its own SMS wording')
+        : bad(`phone form without sms wording returned ${noSms.status}`);
+
+      const thin = await fetch(`${BASE}/api/forms`, {
+        method: 'POST', headers: auth,
+        body: JSON.stringify({ name: 'Thin', consentText: 'ok' }),
+      });
+      thin.status === 422 ? ok('and a form needs a real consent sentence') : bad(`thin consent returned ${thin.status}`);
+
+      const consentText = 'Yes, email me occasional offers. I can unsubscribe any time.';
+      const made = await fetch(`${BASE}/api/forms`, {
+        method: 'POST', headers: auth,
+        body: JSON.stringify({ name: `Test form ${stamp}`, headline: 'Join us', consentText, doubleOptIn: true }),
+      }).then((r) => r.json());
+      made.ok ? ok(`created a form (${made.form.slug})`) : bad(`form creation failed: ${made.reason}`);
+
+      const slug = made.form.slug;
+
+      // The hosted page renders without a session — it is for the public.
+      const page = await fetch(`${BASE}/f/${slug}`);
+      const html = await page.text();
+      page.status === 200 && html.includes(consentText)
+        ? ok('the hosted page renders the consent sentence people will agree to')
+        : bad(`hosted page: ${page.status}`);
+
+      // A public page must not carry the admin interface. The first version
+      // of this inherited the root layout and shipped the navigation rail and
+      // a dropdown naming every business in the workspace to whoever opened
+      // the signup link.
+      !/nav-brand|Campaign operating system|Business filter/.test(html)
+        ? ok('and carries none of the admin shell')
+        : bad('the hosted form leaks the application navigation to the public');
+      const brands = await db.brand.findMany({ where: { organizationId: orgId }, select: { name: true } });
+      brands.every((b) => !html.includes(b.name))
+        ? ok('nor the names of the other businesses in the workspace')
+        : bad('the hosted form leaks other brand names');
+
+      // Submitting, with no session.
+      if (mockUp) {
+        await fetch(`${MOCK}/__reset`, { method: 'POST' });
+        process.env.RESEND_API_KEY = process.env.MOCK_RESEND_KEY || 'mock-resend-key';
+        process.env.RESEND_FROM = 'Summit Local <hello@summitlocal.test>';
+        process.env.RESEND_BASE_URL = MOCK;
+      }
+
+      const submit = await fetch(`${BASE}/api/forms/${slug}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'Sam Rivera', email: address }),
+      }).then((r) => r.json());
+      submit.ok ? ok('a stranger can sign up with no session') : bad(`submit failed: ${submit.reason}`);
+
+      const created = await db.contact.findFirst({ where: { organizationId: orgId, email: address } });
+      created?.emailConsent === 'PENDING'
+        ? ok('and arrives as pending, not subscribed')
+        : bad(`signup consent: ${created?.emailConsent}`);
+      const formRecord = await db.consentRecord.findFirst({ where: { contactId: created!.id } });
+      formRecord?.evidence.includes(consentText)
+        ? ok('with the exact sentence they were shown')
+        : bad(`evidence: ${formRecord?.evidence}`);
+      formRecord?.ip ? ok(`and where they were (${formRecord.ip})`) : bad('no ip recorded');
+
+      // The honeypot is silently accepted and discarded.
+      const botAddress = `bot-${stamp}@example.com`;
+      await fetch(`${BASE}/api/forms/${slug}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'Bot', email: botAddress, hp: 'http://spam.example' }),
+      });
+      (await db.contact.count({ where: { organizationId: orgId, email: botAddress } })) === 0
+        ? ok('a filled honeypot is thanked and thrown away')
+        : bad('the honeypot let a bot through');
+
+      // No account-existence oracle: a known address gets the same answer.
+      const repeat = await fetch(`${BASE}/api/forms/${slug}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'Sam Rivera', email: address }),
+      }).then((r) => r.json());
+      JSON.stringify(repeat.message) === JSON.stringify(submit.message)
+        ? ok('signing up twice says the same thing — the form is not an oracle')
+        : bad('a repeat signup gave a different answer');
+
+      // ---- the confirmation ----
+      const token = await db.confirmationToken.findFirst({
+        where: { contactId: created!.id, confirmedAt: null },
+        orderBy: { createdAt: 'desc' },
+      });
+      token ? ok('a confirmation token was minted') : bad('no confirmation token');
+
+      if (mockUp) {
+        const { messages } = await fetch(`${MOCK}/__messages`).then((r) => r.json());
+        const sentToThem = messages.filter((m: { to: string[] }) => m.to.includes(address));
+        sentToThem.length > 0
+          ? ok('and the confirmation email actually went out')
+          : bad('no confirmation email reached the provider');
+        /\/c\//.test(sentToThem.at(-1)?.text ?? '')
+          ? ok('carrying the link')
+          : bad('confirmation email has no link');
+      }
+
+      // Redeem it. The raw token is not in the database, so drive it the way a
+      // person would: pull it out of the email the provider received.
+      // The **latest** email, not the first. Signing up twice above minted a
+      // second token and invalidated the first, which is deliberate — a link
+      // sitting in an old inbox should not stay live for three days — and
+      // reading the first email tested exactly that invalidation working.
+      let raw: string | null = null;
+      if (mockUp) {
+        const { messages } = await fetch(`${MOCK}/__messages`).then((r) => r.json());
+        const latest = messages.filter((m: { to: string[] }) => m.to.includes(address)).at(-1);
+        raw = latest?.text.match(/\/c\/([A-Za-z0-9_-]+)/)?.[1] ?? null;
+      }
+
+      if (!raw) {
+        bad('could not recover the confirmation link from the sent email');
+      } else {
+        const beforeReach = await fetch(`${BASE}/api/send`, {
+          method: 'POST', headers: auth,
+          body: JSON.stringify({ channel: 'email', subject: 'x', body: 'y', contactIds: [created!.id], dryRun: true }),
+        }).then((r) => r.json());
+        beforeReach.reach.reachable === 0 ? ok('before confirming, they are not reachable') : bad('pending contact was reachable');
+
+        const clicked = await fetch(`${BASE}/c/${raw}`);
+        const confirmHtml = await clicked.text();
+        clicked.status === 200 && /on the list/i.test(confirmHtml)
+          ? ok('clicking the link confirms them')
+          : bad(`confirm returned ${clicked.status}`);
+
+        const after = await db.contact.findUnique({ where: { id: created!.id } });
+        after?.emailConsent === 'SUBSCRIBED' ? ok('and they become subscribed') : bad(`after confirm: ${after?.emailConsent}`);
+
+        const afterReach = await fetch(`${BASE}/api/send`, {
+          method: 'POST', headers: auth,
+          body: JSON.stringify({ channel: 'email', subject: 'x', body: 'y', contactIds: [created!.id], dryRun: true }),
+        }).then((r) => r.json());
+        afterReach.reach.reachable === 1
+          ? ok('the reachable audience grows by exactly one')
+          : bad(`after confirming, reachable is ${afterReach.reach.reachable}`);
+
+        const proof = await db.consentRecord.findFirst({
+          where: { contactId: created!.id, basis: 'confirmation' },
+        });
+        proof ? ok('and the confirmation itself is recorded as evidence') : bad('no confirmation consent record');
+
+        // Idempotent: mail clients pre-fetch, people click twice.
+        const twice = await fetch(`${BASE}/c/${raw}`);
+        twice.status === 200 ? ok('clicking again is not an error') : bad(`second click returned ${twice.status}`);
+
+        const nonsense = await fetch(`${BASE}/c/not-a-real-token`);
+        nonsense.status === 404 ? ok('a made-up token is refused') : bad(`bogus token returned ${nonsense.status}`);
+
+        // Signing up twice minted a second link and killed the first. A live
+        // link sitting in an old inbox for three days is exactly what that
+        // prevents.
+        const { messages: allMsgs } = await fetch(`${MOCK}/__messages`).then((r) => r.json());
+        const first = allMsgs.filter((m: { to: string[] }) => m.to.includes(address))[0];
+        const firstToken = first?.text.match(/\/c\/([A-Za-z0-9_-]+)/)?.[1];
+        if (firstToken && firstToken !== raw) {
+          const stale = await fetch(`${BASE}/c/${firstToken}`);
+          stale.status === 404
+            ? ok('and the link from an earlier signup is dead, as intended')
+            : bad(`a superseded confirmation link still works: ${stale.status}`);
+        }
+      }
+
+      // ---- a conversion becomes a pending contact ----
+      const org = await db.organization.findUnique({ where: { id: orgId }, select: { ingestKey: true } });
+      const leadAddress = `lead-${stamp}@example.com`;
+      const lead = await fetch(`${BASE}/api/events`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ key: org!.ingestKey, kind: 'quote_request', email: leadAddress, name: 'Jo Lead' }),
+      });
+      lead.ok ? ok('a website quote request is accepted') : bad(`event returned ${lead.status}`);
+      const leadContact = await db.contact.findFirst({ where: { organizationId: orgId, email: leadAddress } });
+      leadContact
+        ? ok('and now becomes a contact instead of being thrown away')
+        : bad('a conversion with an email created no contact');
+      leadContact?.emailConsent === 'PENDING'
+        ? ok('held as pending — a quote request is not a subscription')
+        : bad(`conversion contact consent: ${leadContact?.emailConsent}`);
+      const leadRecord = await db.consentRecord.findFirst({ where: { contactId: leadContact!.id } });
+      leadRecord?.basis === 'conversion' ? ok('with the conversion recorded as the basis') : bad('no conversion consent record');
+
+      // Cleanup.
+      const ids = (
+        await db.contact.findMany({
+          where: { organizationId: orgId, email: { in: [address, botAddress, leadAddress] } },
+          select: { id: true },
+        })
+      ).map((c) => c.id);
+      await db.conversion.deleteMany({ where: { contactId: { in: ids } } });
+      await db.consentRecord.deleteMany({ where: { contactId: { in: ids } } });
+      await db.confirmationToken.deleteMany({ where: { contactId: { in: ids } } });
+      await db.contact.deleteMany({ where: { id: { in: ids } } });
+      await db.signupForm.deleteMany({ where: { slug } });
     }
   }
 

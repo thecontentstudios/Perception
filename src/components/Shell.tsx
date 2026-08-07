@@ -74,6 +74,11 @@ const NAV_SECTIONS: { label: string; items: NavItem[] }[] = [
         label: 'Contacts',
         d: 'M16 19v-1.5a4 4 0 0 0-8 0V19m4-8a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm7 8v-1a3.5 3.5 0 0 0-2.5-3.3M18 5.4a3 3 0 0 1 0 5.2',
       },
+      {
+        href: '/grow',
+        label: 'Grow the list',
+        d: 'M12 20V8m0 0L7 13m5-5l5 5M4 4h16',
+      },
       { href: '/media', label: 'Media Library', d: 'M4 5h16v14H4zm3 9l3.5-4 3 3.5L16 11l4 5M8.5 9.5h.01' },
     ],
   },

@@ -33,20 +33,22 @@ model Organization {
   ingestKey String   @unique
   createdAt DateTime @default(now())
 
-  brands       Brand[]
-  memberships  Membership[]
-  accounts     ConnectedAccount[]
-  campaigns    Campaign[]
-  media        MediaAsset[]
-  contacts     Contact[]
-  segments     AudienceSegment[]
-  auditEvents  AuditEvent[]
-  conversions  Conversion[]
-  sessions     Session[]
-  spend        SpendEntry[]
-  budgets      Budget[]
-  batches      MessageBatch[]
-  suppressions Suppression[]
+  brands         Brand[]
+  memberships    Membership[]
+  accounts       ConnectedAccount[]
+  campaigns      Campaign[]
+  media          MediaAsset[]
+  contacts       Contact[]
+  segments       AudienceSegment[]
+  auditEvents    AuditEvent[]
+  conversions    Conversion[]
+  sessions       Session[]
+  spend          SpendEntry[]
+  budgets        Budget[]
+  batches        MessageBatch[]
+  suppressions   Suppression[]
+  consentRecords ConsentRecord[]
+  signupForms    SignupForm[]
 }
 
 model Brand {
@@ -65,6 +67,7 @@ model Brand {
   contacts     Contact[]
   destinations PublishDestination[]
   spend        SpendEntry[]
+  forms        SignupForm[]
 
   @@index([organizationId])
 }
@@ -448,10 +451,12 @@ model Contact {
   source         String?
   createdAt      DateTime     @default(now())
 
-  segments    SegmentMember[]
-  deliveries  EmailDelivery[]
-  texts       SmsDelivery[]
-  conversions Conversion[]
+  segments           SegmentMember[]
+  deliveries         EmailDelivery[]
+  texts              SmsDelivery[]
+  conversions        Conversion[]
+  consentRecords     ConsentRecord[]
+  confirmationTokens ConfirmationToken[]
 
   @@index([organizationId, email])
 }
@@ -845,4 +850,92 @@ model SmsDelivery {
 
   @@index([variationId, status])
   @@index([contactId])
+}
+
+// ---------------------------------------------------------------------------
+// Growing the list
+// ---------------------------------------------------------------------------
+
+/// Why we believe someone agreed to hear from us.
+///
+/// The product's own advice is that the list you own beats bought reach by
+/// four orders of magnitude — which makes "how did this address get here" the
+/// most load-bearing question in the database. `SUBSCRIBED` without a recorded
+/// basis is a claim, and a claim is what a regulator, a mailbox provider, or
+/// an angry recipient will ask us to substantiate.
+///
+/// So consent is an **event log**, not a flag. The flag on `Contact` is the
+/// current answer; these rows are how it got that way, including the exact
+/// sentence the person was shown. Storing the sentence rather than a reference
+/// to it matters: the form's wording can be edited afterwards, and the
+/// evidence has to be what they actually read.
+model ConsentRecord {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  contactId      String
+  contact        Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  channel        Channel
+  state          ConsentState
+  /// form | import | conversion | manual | confirmation | unsubscribe
+  basis          String
+  /// What they saw or did, in words. The sentence beside the checkbox, the
+  /// name of the CSV column, the form of words an owner attested to.
+  evidence       String
+  ip             String?
+  userAgent      String?
+  /// The form, import batch, or conversion this came from.
+  sourceId       String?
+  at             DateTime     @default(now())
+
+  @@index([organizationId, contactId])
+  @@index([contactId, channel, at])
+}
+
+/// A page or embed that collects an address, with the wording it collects it
+/// under.
+model SignupForm {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  brandId        String?
+  brand          Brand?       @relation(fields: [brandId], references: [id])
+  name           String
+  /// Public, unguessable enough not to be enumerated, short enough to embed.
+  slug           String       @unique
+  headline       String
+  blurb          String?
+  /// The sentence beside the checkbox. Copied onto every consent record it
+  /// produces, so editing the form cannot rewrite the past.
+  consentText    String
+  askPhone       Boolean      @default(false)
+  smsConsentText String?
+  /// Confirm by email before counting as subscribed.
+  ///
+  /// Defaults on. A single-opt-in list looks bigger and delivers worse: it
+  /// fills with typos and with addresses whose owners never asked, and both
+  /// of those bounce, and bounces are what mailbox providers score you on.
+  doubleOptIn    Boolean      @default(true)
+  redirectUrl    String?
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId])
+}
+
+/// A single-use link that turns a pending subscription into a real one.
+///
+/// Stored as a hash, for the same reason session tokens are: a database that
+/// leaks should not hand over the ability to confirm subscriptions on behalf
+/// of other people.
+model ConfirmationToken {
+  id          String    @id @default(cuid())
+  contactId   String
+  contact     Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  channel     Channel
+  tokenHash   String    @unique
+  expiresAt   DateTime
+  confirmedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([contactId, channel])
 }
