@@ -7,6 +7,7 @@ import { previewSms, proposeDowngrade, previewRange, quietHoursForAudience } fro
 import { projectEmail, projectSms, type Projection } from '@/lib/projection';
 import { EMAIL_RATES, SMS_RATES, money } from '@/lib/pricing';
 import { CostRail } from './CostRail';
+import { Collapsible } from '@/components/Collapsible';
 
 /**
  * Send an email or a text campaign.
@@ -210,13 +211,18 @@ export default function SendPage() {
       <div className="send-layout">
         <div className="send-main">
           {/* ---------------------------------------------------- audience */}
-          <div className="card card-pad">
-            <div className="send-section-head">
-              <h3>1 · Who gets it</h3>
+          <Collapsible
+            id="send.audience"
+            title="1 · Who gets it"
+            defaultOpen
+            summary={`${reach.reachable.toLocaleString('en-US')} of ${reach.total.toLocaleString('en-US')} reachable`}
+            badge={
               <span className={`pill ${reach.reachable === reach.total ? 'approved' : 'review'}`}>
                 {reach.reachable.toLocaleString('en-US')} reachable
               </span>
-            </div>
+            }
+          >
+          <div className="card card-pad">
 
             <div className="send-filters">
               <label className="field" style={{ marginBottom: 0, flex: 1, minWidth: 160 }}>
@@ -271,17 +277,29 @@ export default function SendPage() {
               </ul>
             )}
           </div>
+          </Collapsible>
 
           {/* ---------------------------------------------------- message */}
-          <div className="card card-pad">
-            <div className="send-section-head">
-              <h3>2 · What it says</h3>
-              {mode === 'sms' && smsPreview && (
+          <Collapsible
+            id="send.message"
+            title="2 · What it says"
+            defaultOpen
+            summary={
+              mode === 'sms' && smsPreview
+                ? `${smsPreview.segments} ${smsPreview.segments === 1 ? 'segment' : 'segments'} · ${smsPreview.encoding}`
+                : subject.trim()
+                  ? `“${subject.trim().slice(0, 48)}”`
+                  : 'nothing written yet'
+            }
+            badge={
+              mode === 'sms' && smsPreview ? (
                 <span className={`pill ${smsPreview.encoding === 'GSM-7' ? 'approved' : 'review'}`}>
                   {smsPreview.segments} {smsPreview.segments === 1 ? 'segment' : 'segments'} · {smsPreview.encoding}
                 </span>
-              )}
-            </div>
+              ) : undefined
+            }
+          >
+          <div className="card card-pad">
 
             {mode === 'email' && (
               <div className="field">
@@ -354,13 +372,16 @@ export default function SendPage() {
               </span>
             </div>
           </div>
+          </Collapsible>
 
           {/* ---------------------------------------------------- service */}
+          <Collapsible
+            id="send.service"
+            title="3 · Which service sends it"
+            defaultOpen
+            summary="rates differ by more than 10× — this is where that shows up"
+          >
           <div className="card card-pad">
-            <div className="send-section-head">
-              <h3>3 · Which service sends it</h3>
-              <span className="card-sub">Rates differ by more than 10×. This is where that shows up.</span>
-            </div>
 
             {mode === 'email' ? (
               <>
@@ -468,6 +489,7 @@ export default function SendPage() {
               </>
             )}
           </div>
+          </Collapsible>
         </div>
 
         <CostRail
