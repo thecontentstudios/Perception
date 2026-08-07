@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { Collapsible } from '@/components/Collapsible';
 import { useMemo, useState } from 'react';
 import { BRANDS, useApp } from '@/lib/store';
 import {
@@ -150,9 +151,14 @@ export default function AdvertisePage() {
       ))}
 
       {/* -------------------------------------------------- what each can do */}
-      <section className="route-group">
+      <Collapsible
+        id="advertise.matrix"
+        title="What each one can actually do"
+        defaultOpen={false}
+        summary="the capability matrix — the useful cells are the ones that say no"
+        className="route-group"
+      >
         <div className="rg-head">
-          <h3>What each one can actually do</h3>
           <p>
             The useful cells here are the ones that say no. A link is not clickable in an Instagram caption; video
             does not play in Gmail; a picture in a text costs ten times a text. Each of those is a campaign somebody
@@ -160,7 +166,7 @@ export default function AdvertisePage() {
           </p>
         </div>
         <CapabilityTable />
-      </section>
+      </Collapsible>
     </div>
   );
 }
@@ -207,9 +213,14 @@ function RouteGroupSection({
   const hidden = routes.length - visible.length;
 
   return (
-    <section className="route-group">
+    <Collapsible
+      id={`advertise.${group}`}
+      title={GROUP_LABEL[group]}
+      defaultOpen
+      summary={`${routes.length} ${routes.length === 1 ? 'route' : 'routes'}, best fit first`}
+      className="route-group"
+    >
       <div className="rg-head">
-        <h3>{GROUP_LABEL[group]}</h3>
         <p>{GROUP_BLURB[group]}</p>
         {group !== 'owned' && (
           <p className="rg-order">
@@ -240,7 +251,7 @@ function RouteGroupSection({
           Show fewer
         </button>
       )}
-    </section>
+    </Collapsible>
   );
 }
 

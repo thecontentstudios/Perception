@@ -1321,7 +1321,9 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
   /free|\$|\u00a2/.test(headlineCost) ? ok('and it carries its price: ' + headlineCost) : bad('headline has no price');
 
   // Three groups, each internally consistent about what it sells.
-  const groupHeads = await page.$$eval('.rg-head h3', (n) => n.map((e) => e.textContent.trim()));
+  // The group headings live in the Collapsible headers now — the fold
+  // conversion merged the two header systems, titles included.
+  const groupHeads = await page.$$eval('.route-group .collapsible-toggle', (n) => n.map((e) => e.textContent.trim()));
   groupHeads.length >= 4 ? ok(`${groupHeads.length} sections: ${groupHeads.join(' / ')}`) : bad('groups missing: ' + groupHeads.join(','));
 
   // The unit words must not be mixed inside one group's cost column.

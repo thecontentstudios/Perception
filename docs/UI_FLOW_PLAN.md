@@ -60,7 +60,7 @@ folding sections — money and results (with per-channel cost-per-result from
 exact money over measured outcomes only), messages sent, ad flights. The
 page about intentions became a page about outcomes too.
 
-### Phase 19 — The density pass — **/spend done; rest deferred**
+### Phase 19 — The density pass — **done for /spend, /send, /advertise**
 `/spend` — the heaviest screen — folds in four sections with live summaries
 ("$4.20 charged · 1,110 messages committed", "2 plans sketched · $210 if
 committed"), the rate card shipping pre-folded because 400 lines of
