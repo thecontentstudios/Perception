@@ -2,6 +2,7 @@ import type { Channel } from '../types';
 import type { Publisher } from './types';
 import { fetchBlueskyMetrics, graphemeLength, publishToBluesky } from './bluesky';
 import { mastodonContext, mastodonPublisher } from './mastodon';
+import { facebookPublisher } from './meta';
 import { summaries } from '../oauth/store';
 
 const MAX_GRAPHEMES = 300;
@@ -72,6 +73,7 @@ export const blueskyPublisher: Publisher = {
 const REGISTRY: Partial<Record<Channel, Publisher>> = {
   bluesky: blueskyPublisher,
   mastodon: mastodonPublisher,
+  facebook: facebookPublisher,
 };
 
 /** The publisher for a channel, or null when nothing can publish it yet. */
@@ -87,6 +89,7 @@ export function publisherFor(channel: Channel): Publisher | null {
 export function canPublish(channel: Channel): boolean {
   if (channel === 'bluesky') return blueskyContext() !== null;
   if (channel === 'mastodon') return mastodonContext() !== null;
+  if (channel === 'facebook') return summaries().some((g) => g.channel === 'facebook');
   return false;
 }
 

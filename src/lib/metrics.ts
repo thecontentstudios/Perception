@@ -1,5 +1,5 @@
 import { db } from './db';
-import { publisherFor } from './publishers/registry';
+import { canPublish, publisherFor } from './publishers/registry';
 import type { Channel } from './types';
 
 /**
@@ -76,8 +76,15 @@ export async function refreshPlatformMetrics(
 
     const publisher = publisherFor(channel);
     if (!publisher?.fetchMetrics) {
-      // Not a failure. Sixteen of eighteen channels have no reader, and
-      // reporting that as an error every run would bury the real ones.
+      // Not a failure. Most channels have no reader, and reporting that as
+      // an error every run would bury the real ones.
+      skipped.add(channel);
+      continue;
+    }
+    if (!canPublish(channel)) {
+      // A reader with no grant is the not_connected case, not an error: the
+      // owner disconnecting Facebook must not turn every old post into a
+      // failure row on the next refresh.
       skipped.add(channel);
       continue;
     }

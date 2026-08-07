@@ -253,6 +253,8 @@ async function main() {
 
   await metricsSection();
 
+  await facebookSection();
+
   await cleanup();
 }
 
@@ -319,10 +321,10 @@ async function metricsSection() {
     : bad(`email impressions reported as ${emailAvail.state}, which is the bug this phase fixes`);
 
   // A channel nobody connected but which does report is a third thing again.
-  const fbAvail = measurabilityOf('facebook', 'impressions', { connected: [] });
-  fbAvail.state === 'not_ingested'
+  const liAvail = measurabilityOf('linkedin', 'impressions', { connected: [] });
+  liAvail.state === 'not_ingested'
     ? ok('a channel that reports but has no reader is marked as our gap, not the platform\'s')
-    : bad(`facebook impressions reported as ${fbAvail.state}`);
+    : bad(`linkedin impressions reported as ${liAvail.state}`);
 
   // A deleted post stops being asked about.
   await fetch(`${MOCK}/__delete`, {
@@ -363,6 +365,79 @@ async function metricsSection() {
     : bad(`report still shows ${stale.engagements} engagements for a deleted post`);
 
   await db.metric.deleteMany({ where: { variationId: TEST_ID } });
+}
+
+
+/**
+ * Phase 12 — the first fit-ranked publisher, and the first real reach number.
+ *
+ * The ranking has recommended Facebook to the modelled industries since Phase
+ * 5, while the registry could not publish there. This exercises the real
+ * adapter over a real HTTP round trip against a stand-in Graph API — and the
+ * part that moves the product: `post_impressions` comes back as a number, the
+ * first channel where reach is not an honest null.
+ */
+async function facebookSection() {
+  console.log('\n== Facebook: publish through the Graph API, and read reach back ==');
+
+  const META = process.env.META_BASE_URL || 'http://localhost:4325';
+  const up = await fetch(`${META}/__posts`).then((r) => r.ok).catch(() => false);
+  if (!up) {
+    if (process.env.META_BASE_URL) return bad('META_BASE_URL set but mock-meta is not running');
+    return bad('mock-meta is not running — start it with: npm run mock:meta');
+  }
+  await fetch(`${META}/__reset`, { method: 'POST' });
+
+  const { facebookPublisher } = await import('../src/lib/publishers/meta');
+  const { canPublish } = await import('../src/lib/publishers/registry');
+  const { measurabilityOf } = await import('../src/lib/measurability');
+
+  canPublish('facebook') === false
+    ? ok('with no grant, facebook is honestly not publishable')
+    : bad('canPublish(facebook) true with nothing connected');
+
+  saveGrant({
+    channel: 'facebook',
+    accessToken: process.env.MOCK_META_TOKEN || 'mock-page-token',
+    refreshToken: null, expiresInSec: null, scopes: ['pages_manage_posts'],
+    accountLabel: 'Summit Local (Page)',
+    externalAccountId: process.env.MOCK_META_PAGE_ID || '108000000001',
+  });
+
+  try {
+    canPublish('facebook') ? ok('with a grant, facebook is publishable') : bad('grant not seen by canPublish');
+
+    const posted = await facebookPublisher.publish('Spring cleanups are booking now. Flat quotes, no site visit.', {});
+    posted.ok ? ok(`published to the Page (${posted.id})`) : bad(`publish failed: ${posted.error}`);
+    const wire = await fetch(`${META}/__posts`).then((r) => r.json());
+    wire.count === 1 ? ok('exactly one post reached the platform') : bad(`platform saw ${wire.count}`);
+
+    // The platform reports numbers — set them, read them through the adapter.
+    await fetch(`${META}/__insights`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: posted.id, impressions: 4180, reactions: 23, comments: 5, shares: 4 }),
+    });
+    const m = await facebookPublisher.fetchMetrics!(posted.id!);
+    m.ok && m.metrics?.impressions === 4180
+      ? ok('impressions come back as a number (4,180) — the first channel where reach is real')
+      : bad(`impressions: ${JSON.stringify(m)}`);
+    m.metrics?.engagements === 32
+      ? ok('engagement sums reactions, comments and shares (23+5+4 = 32)')
+      : bad(`engagements: ${m.metrics?.engagements}`);
+
+    measurabilityOf('facebook', 'impressions', { connected: ['facebook'] }).state === 'measured'
+      ? ok('the report marks connected Facebook impressions measured')
+      : bad('measurability disagrees with the reader that exists');
+
+    // A revoked token is a reconnect, not a retry.
+    await fetch(`${META}/__revoke`, { method: 'POST' });
+    const dead = await facebookPublisher.publish('This one should be refused.', {});
+    !dead.ok && dead.needsReconnect
+      ? ok('Graph code 190 is classified as reconnect, not retry')
+      : bad(`revoked publish: ${JSON.stringify(dead)}`);
+  } finally {
+    removeGrant('facebook');
+  }
 }
 
 /** Leave the demo workspace exactly as found, so the suite re-runs. */

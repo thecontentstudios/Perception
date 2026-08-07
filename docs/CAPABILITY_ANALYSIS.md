@@ -20,7 +20,7 @@ to the cent. What has not kept pace is the part that touches the outside world.
 | Server surface (`src/app/api`) | ~3,700 lines | Real, authenticated, tenant-scoped |
 | Worker + queue | ~420 lines | Real; fires scheduled posts |
 | Tests | ~4,800 lines | 719 checks, five suites |
-| **Channels that can actually publish** | **2 of 18** | Bluesky, Mastodon |
+| **Channels that can actually publish** | **3 of 18** | Bluesky, Mastodon, Facebook Pages |
 | **Channels that can actually send** | **2 of 2** | Email through Resend, SMS through Twilio |
 | **Ad platforms that can actually buy** | **0 of 11** | Priced, planned, never purchased |
 
@@ -269,7 +269,7 @@ the reason on hover, distinct from "connect to see"; a deleted post is
 recorded as gone once and never asked about again — but a 404 on a post never
 read successfully is an error, not a tombstone.
 
-### Phase 12 — Widen: publishers, then ads — **ads half done**
+### Phase 12 — Widen: publishers, then ads — **done** (Facebook; Instagram needs media)
 
 1. Publishers in fit order, not alphabetical: Facebook and Instagram first,
    because those are what the ranking actually recommends for the industries
@@ -286,7 +286,12 @@ owner can act on in the platform's own tool (budget, audience, attributed
 destination, deep link, and the stated position that we do not place the buy);
 imported spend lands tagged `certainty: 'estimated'`, kept apart from charged;
 settling flips it to exact with the invoice difference as its own adjustment
-row. Publishers in fit order (Facebook, Instagram) remain.
+row. Facebook Pages publishes through the real Graph API adapter against a
+stand-in server, and its metrics reader returns `post_impressions` — the
+first channel where reach is a number rather than an honest null. Instagram
+waits on media handling in the publish path: a caption-only IG post does not
+exist, and pretending otherwise would ship a publisher that refuses every
+real post.
 
 ---
 

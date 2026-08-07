@@ -163,7 +163,7 @@ export async function computePerformance(organizationId: string): Promise<Comput
   ]);
 
   const DELIVERED = ['DELIVERED', 'OPENED', 'CLICKED'];
-  const connected = (['bluesky', 'mastodon'] as Channel[]).filter((c) => canPublish(c));
+  const connected = (['bluesky', 'mastodon', 'facebook'] as Channel[]).filter((c) => canPublish(c));
   const ctx = { connected };
 
   const performance: CampaignPerformance[] = campaigns.map((c) => {

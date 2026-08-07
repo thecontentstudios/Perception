@@ -1469,7 +1469,27 @@ spend appears on /spend as an estimate, apart from charged; settling a 5150¢
 invoice against a 4700¢ estimate writes a +450¢ adjustment, every row goes
 exact, and the rows sum to the invoice.
 
-*(Second half of Phase 12 — publishers in fit order, Facebook and Instagram
-behind the `Publisher` contract against a stand-in Graph API — is the next
-iteration.)*
+### 12.4 — Facebook Pages, and the first real reach number
+
+The third implementation of the `Publisher` contract, and different from both
+predecessors in ways that exercise it: the token travels as a parameter
+rather than a header, and errors arrive as `{ error: { code } }` with numeric
+codes — 190 and the 2xx permission range classify as reconnect, everything
+else as a plain failure.
+
+The part that moves the product: **Facebook reports impressions.** Bluesky
+and Mastodon count likes and boosts and no views, so every reach cell in the
+report has been a labelled permanent blank. `post_impressions` from the
+insights edge is the first number the metrics reader returns for reach that
+is not null — and `measurability.ts` now answers `not_connected` /
+`measured` for Facebook instead of `not_ingested`, with LinkedIn taking over
+as the honest example of "our gap".
+
+The refresher learned a distinction from the tests: a channel with a reader
+but no grant is **skipped, not failed** — an owner disconnecting Facebook
+must not turn every old post into an error row on the next refresh.
+
+Instagram is deliberately not in this commit: a caption-only IG post does not
+exist — the API requires media — and a publisher that refuses every real post
+would be worse than the honest absence. It lands with media handling.
 

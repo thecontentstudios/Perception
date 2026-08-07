@@ -1015,10 +1015,19 @@ async function measurabilityChecks() {
     ? ok('Bluesky impressions: unavailable even when connected — the API has no view count')
     : bad(`Bluesky impressions reported as ${bsky.state}, which implies connecting would help`);
 
-  const fbConnected = measurabilityOf('facebook', 'impressions', { connected: ['facebook'] });
-  fbConnected.state === 'not_ingested'
-    ? ok('Facebook impressions: our gap, and stays our gap once connected')
-    : bad(`Facebook impressions reported as ${fbConnected.state}`);
+  // Facebook grew a reader in Phase 12, so the "we have not built it" case
+  // moved to LinkedIn — and Facebook must now say "connect it" instead.
+  const li = measurabilityOf('linkedin', 'impressions', { connected: ['linkedin'] });
+  li.state === 'not_ingested'
+    ? ok('LinkedIn impressions: our gap, and stays our gap once connected')
+    : bad(`LinkedIn impressions reported as ${li.state}`);
+  const fb = measurabilityOf('facebook', 'impressions', { connected: [] });
+  fb.state === 'not_connected'
+    ? ok('Facebook impressions: connect it and they fill in — the reader exists now')
+    : bad(`Facebook impressions reported as ${fb.state}`);
+  measurabilityOf('facebook', 'impressions', { connected: ['facebook'] }).state === 'measured'
+    ? ok('and once connected they are measured')
+    : bad('connected Facebook still not measured');
 
   // Clicks are ours on every channel — that is what minting a link per
   // variation buys.
