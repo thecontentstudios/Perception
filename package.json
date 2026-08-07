@@ -1,0 +1,45 @@
+{
+  "name": "perception",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Perception \u2014 a campaign operating system for small businesses. One campaign, everywhere your customers are.",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "test:ui": "node scripts/ui-test.js",
+    "test:unit": "tsx scripts/unit-test.ts",
+    "test": "npm run test:unit && npm run test:media && npm run test:security && npm run test:worker && npm run test:ui",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:migrate": "prisma migrate dev",
+    "db:studio": "prisma studio",
+    "worker": "tsx worker.ts",
+    "test:worker": "tsx scripts/worker-test.ts",
+    "test:media": "tsx scripts/media-test.ts",
+    "test:security": "tsx scripts/security-test.ts",
+    "mock:resend": "node scripts/mock-resend.js",
+    "mock:twilio": "node scripts/mock-twilio.js",
+    "mock:meta": "node scripts/mock-meta.js"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.3",
+    "bullmq": "^6.0.7",
+    "ioredis": "^6.0.0",
+    "next": "^15.4.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "playwright-core": "^1.56.0",
+    "prisma": "^6.19.3",
+    "tsx": "^4.23.0",
+    "typescript": "^5.8.0"
+  }
+}

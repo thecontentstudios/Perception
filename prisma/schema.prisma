@@ -1,0 +1,1014 @@
+// Perception — production data model (PostgreSQL).
+//
+// The prototype UI runs on in-memory demo data shaped exactly like these
+// models (src/lib/types.ts). Campaign, ContentItem, and ChannelVariation are
+// deliberately separate: the owner edits the shared message on the
+// ContentItem while each ChannelVariation keeps its specialized Instagram,
+// LinkedIn, or email version.
+//
+// Multi-tenancy: every root entity carries organizationId, and all queries
+// are scoped by it (organization-level data isolation).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Workspace
+// ---------------------------------------------------------------------------
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  plan      String   @default("starter")
+  /// Public, embedded in the tracking snippet on the customer's own website.
+  /// It identifies *which tenant* a conversion belongs to; it authorizes
+  /// nothing else and is safe to read in page source — which is the only
+  /// honest way to treat a value that ships to every visitor.
+  ingestKey String   @unique
+  createdAt DateTime @default(now())
+
+  brands         Brand[]
+  memberships    Membership[]
+  accounts       ConnectedAccount[]
+  campaigns      Campaign[]
+  media          MediaAsset[]
+  contacts       Contact[]
+  segments       AudienceSegment[]
+  auditEvents    AuditEvent[]
+  conversions    Conversion[]
+  sessions       Session[]
+  spend          SpendEntry[]
+  budgets        Budget[]
+  flights        AdFlight[]
+  batches        MessageBatch[]
+  suppressions   Suppression[]
+  consentRecords ConsentRecord[]
+  signupForms    SignupForm[]
+}
+
+model Brand {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  name           String
+  industry       String
+  website        String?
+  colorIndex     Int          @default(0)
+  createdAt      DateTime     @default(now())
+
+  locations    Location[]
+  campaigns    Campaign[]
+  media        MediaAsset[]
+  contacts     Contact[]
+  destinations PublishDestination[]
+  spend        SpendEntry[]
+  forms        SignupForm[]
+
+  @@index([organizationId])
+}
+
+model Location {
+  id           String  @id @default(cuid())
+  brandId      String
+  brand        Brand   @relation(fields: [brandId], references: [id])
+  name         String
+  address      String?
+  // e.g. the Google Business Profile location this maps to
+  externalRefs Json?
+
+  @@index([brandId])
+}
+
+model User {
+  id               String   @id @default(cuid())
+  email            String   @unique
+  name             String
+  /// scrypt, as `scrypt$N$r$p$salt$hash`. Null for an invited user who has
+  /// not set one yet — they can exist and be assigned work before they log in.
+  passwordHash     String?
+  twoFactorEnabled Boolean  @default(false)
+  createdAt        DateTime @default(now())
+
+  memberships        Membership[]
+  sessions           Session[]
+  approvalsRequested Approval[]   @relation("requestedBy")
+  approvalsToDecide  Approval[]   @relation("approver")
+}
+
+/// Server-side sessions, deliberately not JWTs.
+///
+/// A JWT cannot be revoked before it expires, which makes "log out everywhere"
+/// and "we think that laptop was stolen" impossible to honour. A row is one
+/// DELETE. The cost is a lookup per request, which at this scale is nothing.
+model Session {
+  id             String       @id @default(cuid())
+  /// SHA-256 of the cookie value. The raw token is never stored, so a database
+  /// dump does not hand over live sessions.
+  tokenHash      String       @unique
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// The tenant this session is acting in. A user in several organizations
+  /// gets one session per organization rather than an ambient "current org",
+  /// so a request can never be ambiguous about whose data it is touching.
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  expiresAt      DateTime
+  createdAt      DateTime     @default(now())
+  lastSeenAt     DateTime     @default(now())
+  /// Coarse, for the "recent sign-ins" list. Never used for authorization.
+  userAgent      String?
+  ip             String?
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+enum Role {
+  OWNER
+  ADMIN
+  MANAGER
+  CREATOR
+  APPROVER
+  ANALYST
+  GUEST
+}
+
+model Membership {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  userId         String
+  user           User         @relation(fields: [userId], references: [id])
+  role           Role
+
+  @@unique([organizationId, userId])
+}
+
+// ---------------------------------------------------------------------------
+// Connections
+// ---------------------------------------------------------------------------
+
+enum Channel {
+  FACEBOOK
+  INSTAGRAM
+  LINKEDIN
+  TIKTOK
+  YOUTUBE
+  GOOGLE_BUSINESS
+  X
+  THREADS
+  BLUESKY
+  MASTODON
+  PINTEREST
+  REDDIT
+  NEXTDOOR
+  SNAPCHAT
+  WHATSAPP
+  EMAIL
+  SMS
+  WEBSITE
+}
+
+enum ConnectionStatus {
+  CONNECTED
+  NEEDS_RECONNECT
+  EXPIRING
+  NOT_CONNECTED
+}
+
+model ConnectedAccount {
+  id              String           @id @default(cuid())
+  organizationId  String
+  organization    Organization     @relation(fields: [organizationId], references: [id])
+  channel         Channel
+  status          ConnectionStatus @default(CONNECTED)
+  displayName     String
+  destinationKind String
+  // OAuth tokens encrypted at rest (application-layer envelope encryption);
+  // never returned by the API.
+  encryptedTokens Bytes?
+  scopes          String[]
+  expiresAt       DateTime?
+  lastSyncAt      DateTime?
+  connectedById   String?
+
+  variations   ChannelVariation[]
+  destinations PublishDestination[]
+
+  @@index([organizationId, channel])
+}
+
+/// A place a post can actually land: one Page, professional account,
+/// location, company page, or board. One ConnectedAccount yields many.
+model PublishDestination {
+  id         String           @id @default(cuid())
+  accountId  String
+  account    ConnectedAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  channel    Channel
+  name       String
+  kind       String
+  /// The platform's own identifier, used for publishing and dedup.
+  externalId String
+  brandId    String?
+  brand      Brand?           @relation(fields: [brandId], references: [id])
+  enabled    Boolean          @default(false)
+  followers  Int?
+  /// Destination-scoped problems: a missing role, an unverified location.
+  issues     String[]
+  hue        Int              @default(0)
+
+  variations ChannelVariation[]
+
+  @@unique([accountId, externalId])
+  @@index([brandId, channel])
+}
+
+// ---------------------------------------------------------------------------
+// Campaigns and content
+// ---------------------------------------------------------------------------
+
+enum CampaignStatus {
+  DRAFT
+  IN_REVIEW
+  SCHEDULED
+  ACTIVE
+  COMPLETED
+  ARCHIVED
+}
+
+model Campaign {
+  id             String         @id @default(cuid())
+  organizationId String
+  organization   Organization   @relation(fields: [organizationId], references: [id])
+  brandId        String
+  brand          Brand          @relation(fields: [brandId], references: [id])
+  name           String
+  status         CampaignStatus @default(DRAFT)
+  goal           String
+  audience       String?
+  startDate      DateTime
+  endDate        DateTime
+  offer          String?
+  ctaLabel       String
+  ctaUrl         String
+  colorIndex     Int            @default(0)
+  utmCode        String
+  description    String?
+  templateId     String?
+  createdById    String
+  createdAt      DateTime       @default(now())
+
+  items        ContentItem[]
+  conversions  Conversion[]
+  trackedLinks TrackedLink[]
+  spend        SpendEntry[]
+  flights      AdFlight[]
+
+  @@index([organizationId, brandId, status])
+}
+
+model ContentItem {
+  id          String   @id @default(cuid())
+  campaignId  String
+  campaign    Campaign @relation(fields: [campaignId], references: [id])
+  title       String
+  kind        String // social | email | website | sms
+  coreMessage String
+
+  variations ChannelVariation[]
+
+  @@index([campaignId])
+}
+
+enum VariationStatus {
+  IDEA
+  DRAFT
+  REVIEW
+  APPROVED
+  SCHEDULED
+  PUBLISHED
+  FAILED
+}
+
+model ChannelVariation {
+  id                   String              @id @default(cuid())
+  contentItemId        String
+  contentItem          ContentItem         @relation(fields: [contentItemId], references: [id])
+  accountId            String?
+  account              ConnectedAccount?   @relation(fields: [accountId], references: [id])
+  /// The specific place this publishes to. Null falls back to the brand's
+  /// default for the channel, and preflight surfaces that.
+  destinationId        String?
+  destination          PublishDestination? @relation(fields: [destinationId], references: [id])
+  channel              Channel
+  format               String
+  status               VariationStatus     @default(DRAFT)
+  scheduledAt          DateTime?
+  publishedAt          DateTime?
+  body                 String
+  subject              String?
+  preheader            String?
+  hasUnsubscribeFooter Boolean             @default(true)
+  ctaLabel             String?
+  ctaUrl               String?
+  hashtags             String[]
+  assigneeId           String?
+  overridden           Boolean             @default(false)
+  /// Set when a worker takes this post to publish it, cleared when it is done.
+  /// Infrastructure state, deliberately not a `status` value: the owner's
+  /// vocabulary is draft/approved/scheduled/published, and a claim that a
+  /// crashed worker never released has to be reclaimable after a timeout —
+  /// which a status enum cannot express.
+  claimedAt            DateTime?
+
+  media       VariationMedia[]
+  approvals   Approval[]
+  attempts    PublicationAttempt[]
+  published   PublishedPost?
+  metrics     Metric[]
+  trackedLink TrackedLink?
+  conversions Conversion[]
+
+  @@index([contentItemId])
+  @@index([channel, status, scheduledAt])
+}
+
+model MediaAsset {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  brandId        String?
+  brand          Brand?       @relation(fields: [brandId], references: [id])
+  kind           String // image | video | logo | document
+  storageKey     String // S3 object key; served via CDN
+  fileName       String
+  mimeType       String
+  sizeBytes      Int
+  width          Int?
+  height         Int?
+  durationSec    Int?
+  altText        String?
+  tags           String[]
+  uploadedById   String?
+  createdAt      DateTime     @default(now())
+
+  usages VariationMedia[]
+
+  @@index([organizationId, brandId])
+}
+
+model VariationMedia {
+  variationId String
+  variation   ChannelVariation @relation(fields: [variationId], references: [id])
+  assetId     String
+  asset       MediaAsset       @relation(fields: [assetId], references: [id])
+  position    Int              @default(0)
+
+  @@id([variationId, assetId])
+}
+
+// ---------------------------------------------------------------------------
+// Approvals and publishing
+// ---------------------------------------------------------------------------
+
+enum ApprovalDecision {
+  PENDING
+  APPROVED
+  CHANGES_REQUESTED
+}
+
+model Approval {
+  id            String           @id @default(cuid())
+  variationId   String
+  variation     ChannelVariation @relation(fields: [variationId], references: [id])
+  requestedById String
+  requestedBy   User             @relation("requestedBy", fields: [requestedById], references: [id])
+  approverId    String
+  approver      User             @relation("approver", fields: [approverId], references: [id])
+  decision      ApprovalDecision @default(PENDING)
+  note          String?
+  requestedAt   DateTime         @default(now())
+  decidedAt     DateTime?
+
+  @@index([approverId, decision])
+}
+
+model PublicationAttempt {
+  id             String           @id @default(cuid())
+  variationId    String
+  variation      ChannelVariation @relation(fields: [variationId], references: [id])
+  // one idempotency key per (variation, scheduled slot); retries reuse it so
+  // a crashed worker can never double-post
+  idempotencyKey String
+  attemptNumber  Int
+  startedAt      DateTime         @default(now())
+  finishedAt     DateTime?
+  success        Boolean?
+  errorCode      String?
+  errorMessage   String?
+  willRetry      Boolean          @default(false)
+
+  @@unique([idempotencyKey, attemptNumber])
+  @@index([variationId])
+}
+
+model PublishedPost {
+  id          String           @id @default(cuid())
+  variationId String           @unique
+  variation   ChannelVariation @relation(fields: [variationId], references: [id])
+  externalId  String
+  url         String?
+  publishedAt DateTime
+
+  @@index([externalId])
+}
+
+// ---------------------------------------------------------------------------
+// Audience
+// ---------------------------------------------------------------------------
+
+enum ConsentState {
+  SUBSCRIBED
+  UNSUBSCRIBED
+  PENDING
+}
+
+model Contact {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  brandId        String?
+  brand          Brand?       @relation(fields: [brandId], references: [id])
+  name           String
+  email          String?
+  phone          String?
+  emailConsent   ConsentState @default(PENDING)
+  smsConsent     ConsentState @default(PENDING)
+  source         String?
+  createdAt      DateTime     @default(now())
+
+  segments           SegmentMember[]
+  deliveries         EmailDelivery[]
+  texts              SmsDelivery[]
+  conversions        Conversion[]
+  consentRecords     ConsentRecord[]
+  confirmationTokens ConfirmationToken[]
+
+  @@index([organizationId, email])
+}
+
+model AudienceSegment {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  brandId        String?
+  name           String
+  description    String?
+  // stored filter for dynamic segments; static segments use members only
+  rule           Json?
+
+  members SegmentMember[]
+
+  @@index([organizationId])
+}
+
+model SegmentMember {
+  segmentId String
+  segment   AudienceSegment @relation(fields: [segmentId], references: [id])
+  contactId String
+  contact   Contact         @relation(fields: [contactId], references: [id])
+
+  @@id([segmentId, contactId])
+}
+
+// ---------------------------------------------------------------------------
+// Email
+// ---------------------------------------------------------------------------
+
+model EmailTemplate {
+  id             String   @id @default(cuid())
+  organizationId String
+  brandId        String?
+  name           String
+  // ordered block structure (header, text, image, button, coupon, footer…)
+  blocks         Json
+  createdAt      DateTime @default(now())
+
+  @@index([organizationId])
+}
+
+/// The life of one message to one person.
+///
+/// `QUEUED` means **we have accepted it and nothing has left the building.**
+/// That reading is the whole point of this enum: the first version treated a
+/// queued row as a completed send, charged for it, and reported the money as
+/// spent — for messages no provider had ever seen.
+///
+/// Money is recorded at `SENT`, and only when a provider hands back its own
+/// reference for the message. Everything after `SENT` is delivery news, which
+/// changes what we know about the message but never what it cost.
+enum DeliveryStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  OPENED
+  CLICKED
+  BOUNCED
+  COMPLAINED
+  SUPPRESSED
+  FAILED
+}
+
+model EmailDelivery {
+  id          String         @id @default(cuid())
+  variationId String
+  batchId     String?
+  batch       MessageBatch?  @relation(fields: [batchId], references: [id])
+  contactId   String
+  contact     Contact        @relation(fields: [contactId], references: [id])
+  status      DeliveryStatus @default(QUEUED)
+  /// What this message will cost when it is sent, priced when it was queued.
+  ///
+  /// Stored rather than recomputed so that a rate change, or a provider
+  /// switch, cannot retroactively alter the price of a message already
+  /// waiting in the queue. It is also what makes committed spend computable:
+  /// the sum of this column over unsent rows is money promised but not moved.
+  costCents   Int            @default(0)
+  providerRef String?
+  sentAt      DateTime?
+  openedAt    DateTime?
+  clickedAt   DateTime?
+  failedAt    DateTime?
+  failReason  String?
+  bouncedAt   DateTime?
+  /// hard | soft | complaint. A hard bounce suppresses the address; a soft one
+  /// records the event and leaves the list alone, because a full mailbox or a
+  /// bad afternoon at a mail server is not a dead address.
+  bounceKind  String?
+
+  @@index([variationId, status])
+  @@index([contactId])
+  @@index([providerRef])
+}
+
+// ---------------------------------------------------------------------------
+// Inbox
+// ---------------------------------------------------------------------------
+
+model Conversation {
+  id             String   @id @default(cuid())
+  organizationId String
+  brandId        String?
+  channel        Channel
+  kind           String // comment | dm | mention | review | email_reply
+  fromName       String
+  externalRef    String?
+  excerpt        String
+  rating         Int?
+  status         String   @default("open") // open | replied | done
+  assigneeId     String?
+  campaignId     String?
+  receivedAt     DateTime
+
+  @@index([organizationId, status, receivedAt])
+}
+
+// ---------------------------------------------------------------------------
+// Analytics
+// ---------------------------------------------------------------------------
+
+/// One reading of a post's numbers, from whoever was able to supply them.
+///
+/// Every count is nullable, and that is the whole design. These columns used
+/// to be `Int @default(0)`, which cannot distinguish "the platform said zero"
+/// from "the platform does not publish this" — and the two are opposite
+/// claims. Bluesky and Mastodon report likes, boosts and replies and **no view
+/// count at all**, so a row written from either will always carry a null
+/// `impressions`. Storing 0 would tell an owner nobody saw their post.
+model Metric {
+  id          String           @id @default(cuid())
+  variationId String
+  variation   ChannelVariation @relation(fields: [variationId], references: [id], onDelete: Cascade)
+  capturedAt  DateTime         @default(now())
+  impressions Int?
+  clicks      Int?
+  engagements Int?
+  /// Which reader produced this: a channel name for a platform API, or
+  /// `delivery` for numbers computed from our own send rows. Kept so a
+  /// disagreement between two sources stays attributable instead of being
+  /// resolved by whichever wrote last.
+  source      String           @default("platform")
+  /// The post is gone from the platform. Stops the refresher retrying for
+  /// ever and stops the last known figures being read as current.
+  postMissing Boolean          @default(false)
+
+  @@index([variationId, capturedAt])
+  @@unique([variationId, source, capturedAt])
+}
+
+// ---------------------------------------------------------------------------
+// Attribution
+// ---------------------------------------------------------------------------
+
+/// One short link per variation. Minting per *variation* rather than per
+/// campaign is the whole point: "which post caused this" is the question the
+/// product exists to answer, and a shared campaign link can never answer it.
+model TrackedLink {
+  id          String           @id @default(cuid())
+  /// The path segment in /r/<code>. Short, URL-safe, unguessable enough that
+  /// scanning the space is not worth anyone's time.
+  code        String           @unique
+  variationId String           @unique
+  variation   ChannelVariation @relation(fields: [variationId], references: [id], onDelete: Cascade)
+  campaignId  String
+  campaign    Campaign         @relation(fields: [campaignId], references: [id])
+  /// Where the click actually goes, before UTMs are appended.
+  targetUrl   String
+  createdAt   DateTime         @default(now())
+
+  clicks LinkClick[]
+
+  @@index([campaignId])
+}
+
+model LinkClick {
+  id        String      @id @default(cuid())
+  linkId    String
+  link      TrackedLink @relation(fields: [linkId], references: [id], onDelete: Cascade)
+  /// First-party id set on the visitor, so a conversion minutes later can be
+  /// joined back to the post that caused it.
+  visitorId String
+  clickedAt DateTime    @default(now())
+  referrer  String?
+  userAgent String?
+  /// Set when the same visitor has clicked this link before — counted, but not
+  /// mistaken for a second person.
+  repeat    Boolean     @default(false)
+
+  conversions Conversion[]
+
+  @@index([linkId, clickedAt])
+  @@index([visitorId])
+}
+
+model Conversion {
+  id             String            @id @default(cuid())
+  organizationId String
+  organization   Organization      @relation(fields: [organizationId], references: [id])
+  /// Nullable on purpose. An unattributed quote request is still a real quote
+  /// request, and dropping it would make the totals quietly wrong — "8 leads"
+  /// when the owner counted 12. Reporting says how many we could trace.
+  campaignId     String?
+  campaign       Campaign?         @relation(fields: [campaignId], references: [id])
+  /// Which post, when we know. This is what Phase 3 learns from.
+  variationId    String?
+  variation      ChannelVariation? @relation(fields: [variationId], references: [id])
+  clickId        String?
+  click          LinkClick?        @relation(fields: [clickId], references: [id])
+  contactId      String?
+  contact        Contact?          @relation(fields: [contactId], references: [id])
+  // form_submission | booking | trial_signup | purchase | call | quote_request
+  kind           String
+  channel        Channel?
+  valueCents     Int               @default(0)
+  occurredAt     DateTime          @default(now())
+  /// Caller-supplied id, used to make a double-submitted form count once.
+  externalId     String?
+  // utm payload / referrer captured by the tracking snippet
+  attribution    Json?
+
+  @@unique([organizationId, externalId])
+  @@index([campaignId, kind, occurredAt])
+  @@index([variationId])
+}
+
+// ---------------------------------------------------------------------------
+// Audit
+// ---------------------------------------------------------------------------
+
+model AuditEvent {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  actorUserId    String? // null = system
+  action         String
+  target         String
+  detail         String?
+  at             DateTime     @default(now())
+
+  @@index([organizationId, at])
+}
+
+// ---------------------------------------------------------------------------
+// Money
+// ---------------------------------------------------------------------------
+
+/// Every cent that leaves the business, in one table.
+///
+/// The alternative — deriving spend by counting deliveries and multiplying by
+/// a rate — breaks the first time a rate changes, because last month's sends
+/// silently reprice at this month's rate and the history rewrites itself. A
+/// ledger records what was actually charged at the moment it was charged, so
+/// a number the owner saw in March is still that number in June.
+model SpendEntry {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  brandId        String?
+  brand          Brand?       @relation(fields: [brandId], references: [id])
+  channel        Channel
+  /// message | fixed | ad — the three cost shapes, kept apart because they
+  /// behave differently and averaging them produces a meaningless number.
+  kind           String
+  /// exact | estimated. Ad spend imported from a platform mid-flight is an
+  /// estimate until the invoice settles; a sent email is exact forever.
+  certainty      String       @default("exact")
+  cents          Int
+  /// Sends this entry paid for — messages for email, segments for SMS.
+  units          Int          @default(1)
+  campaignId     String?
+  campaign       Campaign?    @relation(fields: [campaignId], references: [id])
+  note           String?
+  /// The provider's own id for the thing that was charged.
+  ///
+  /// Present for every message cost and absent for everything else, which is
+  /// exactly the behaviour the unique index below needs. Postgres treats NULLs
+  /// as distinct, so many fixed-cost and imported-ad rows coexist happily
+  /// while two confirmations of the same message collide and the second is
+  /// rejected. (The Budget model needed the opposite and had to fold its
+  /// nullability into a non-null `scope` string; here the default is what we
+  /// want, which is worth saying out loud so the difference reads as a
+  /// decision rather than an inconsistency.)
+  providerRef    String?
+  occurredAt     DateTime     @default(now())
+  /// Set when this entry is money on an ad flight — imported mid-flight as an
+  /// estimate, flipped to exact when the invoice settles.
+  flightId       String?
+  flight         AdFlight?    @relation(fields: [flightId], references: [id])
+
+  @@unique([organizationId, providerRef])
+  @@index([organizationId, occurredAt])
+  @@index([organizationId, channel, occurredAt])
+}
+
+/// An ad campaign planned here and bought in the platform's own tool.
+///
+/// The product's position on ads, stated as a schema: full API integration
+/// with eleven ad platforms is a year of approval queues, and pretending
+/// otherwise puts a "Launch" button on the screen that does not launch
+/// anything. What a small business actually needs is the part the platforms
+/// are bad at — deciding how much to spend, on what, saying what it will buy
+/// at posted rates, and keeping the money honest in one ledger afterwards.
+/// The buy itself happens in the platform's own ads manager, from a brief we
+/// write, and the screen says so in words.
+model AdFlight {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  brandId        String?
+  campaignId     String?
+  campaign       Campaign?    @relation(fields: [campaignId], references: [id])
+  channel        Channel
+  /// planned | handed_off | settled | cancelled. Money states, not delivery
+  /// states — what the platform did with the ad is its own reporting.
+  status         String       @default("planned")
+  /// In the owner's words: what this flight is supposed to cause.
+  objective      String
+  /// Who it should reach, as a sentence the platform's targeting UI can be
+  /// driven from. Structured targeting fields would imply we set them.
+  audience       String
+  headline       String?
+  body           String
+  /// Where a click lands, already carrying its UTM parameters, so what the
+  /// flight causes is attributable when it arrives.
+  destinationUrl String
+  dailyCents     Int
+  days           Int
+  /// What the budget buys at the platform's posted rates. A range, never a
+  /// point — the spend is exact, the outcome is the estimate.
+  estImpressionsLow  Int
+  estImpressionsHigh Int
+  createdAt      DateTime     @default(now())
+  handedOffAt    DateTime?
+  settledAt      DateTime?
+  /// The invoice total, once known. Until then the ledger rows carry the
+  /// running estimate.
+  settledCents   Int?
+
+  spend SpendEntry[]
+
+  @@index([organizationId, status])
+  @@index([organizationId, createdAt])
+}
+
+/// A monthly ceiling the owner sets, and what happens when it is reached.
+///
+/// `hardStop` is the whole point. A budget that only warns is a budget that
+/// gets exceeded, and "we sent you an email at 90%" is not a defence when the
+/// card is charged. When hardStop is on, the send path refuses.
+model Budget {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  brandId        String?
+  /// Null means "everything" — one cap across all channels.
+  channel        Channel?
+  /// The uniqueness key, as a non-null string: "<brand|all>:<channel|all>".
+  ///
+  /// The obvious design is a compound unique over (org, brandId, channel,
+  /// month), and it silently does not work. Postgres treats NULLs as
+  /// distinct, so a workspace-wide cap — both columns null — can be inserted
+  /// twice, and the second one is the cap nobody is enforcing. Prisma will
+  /// not even accept nullable columns in an upsert's `where`. Folding the
+  /// nullability into one non-null string makes the constraint real.
+  scope          String
+  /// YYYY-MM. A budget is a calendar-month thing because that is how every
+  /// platform in this space bills and how every owner in this space thinks.
+  month          String
+  capCents       Int
+  hardStop       Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+
+  @@unique([organizationId, scope, month])
+  @@index([organizationId, month])
+}
+
+/// One composed message and the settings it goes out with.
+///
+/// Exists because the dispatcher has to render a body per recipient and had
+/// nowhere to read one from — Phase 7 queued delivery rows with a cost and no
+/// content. Copying the body onto every row would work and would store a
+/// thousand identical paragraphs; a batch stores it once and each delivery
+/// points at it.
+model MessageBatch {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  brandId        String?
+  channel        Channel
+  variationId    String
+  subject        String?
+  body           String
+  /// The From identity, captured at send time. A later change to the sending
+  /// domain must not rewrite what an already-queued message claimed to be.
+  fromName       String?
+  fromEmail      String?
+  /// Where `{{link}}` points, captured at send time.
+  ///
+  /// On the batch rather than resolved per message, so every recipient of one
+  /// campaign gets the same destination even if the campaign's call to action
+  /// is edited afterwards.
+  linkUrl        String?
+  createdAt      DateTime     @default(now())
+
+  emails EmailDelivery[]
+  texts  SmsDelivery[]
+
+  @@index([organizationId, createdAt])
+}
+
+/// An address we must never send to again.
+///
+/// Bounces and complaints are not advisory. A provider that sees you re-mail a
+/// hard bounce will throttle you, and a mailbox provider that sees it will
+/// start filing the rest of your mail as spam — so the damage is not to the
+/// one message, it is to every message after it. The preflight already warns
+/// about sending reputation; this is the mechanism that actually protects it.
+///
+/// Scoped per organization and channel: one tenant's bounce is not another's,
+/// and an address that bounced on email says nothing about a phone number.
+model Suppression {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  channel        Channel
+  /// Lower-cased and trimmed on the way in, so a lookup cannot miss by case.
+  address        String
+  /// bounce | complaint | unsubscribe | manual
+  reason         String
+  detail         String?
+  createdAt      DateTime     @default(now())
+
+  @@unique([organizationId, channel, address])
+  @@index([organizationId, channel])
+}
+
+/// A text message that was sent, priced at the moment of sending.
+///
+/// Segments, not messages, because segments are the billing unit — see
+/// src/lib/sms.ts. Storing the count at send time means a later edit to the
+/// template cannot retroactively change what a past send cost.
+model SmsDelivery {
+  id          String         @id @default(cuid())
+  variationId String
+  batchId     String?
+  batch       MessageBatch?  @relation(fields: [batchId], references: [id])
+  contactId   String
+  contact     Contact        @relation(fields: [contactId], references: [id])
+  status      DeliveryStatus @default(QUEUED)
+  segments    Int
+  encoding    String
+  costCents   Int
+  providerRef String?
+  sentAt      DateTime?
+  deliveredAt DateTime?
+  failedAt    DateTime?
+  failReason  String?
+
+  @@index([variationId, status])
+  @@index([contactId])
+}
+
+// ---------------------------------------------------------------------------
+// Growing the list
+// ---------------------------------------------------------------------------
+
+/// Why we believe someone agreed to hear from us.
+///
+/// The product's own advice is that the list you own beats bought reach by
+/// four orders of magnitude — which makes "how did this address get here" the
+/// most load-bearing question in the database. `SUBSCRIBED` without a recorded
+/// basis is a claim, and a claim is what a regulator, a mailbox provider, or
+/// an angry recipient will ask us to substantiate.
+///
+/// So consent is an **event log**, not a flag. The flag on `Contact` is the
+/// current answer; these rows are how it got that way, including the exact
+/// sentence the person was shown. Storing the sentence rather than a reference
+/// to it matters: the form's wording can be edited afterwards, and the
+/// evidence has to be what they actually read.
+model ConsentRecord {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  contactId      String
+  contact        Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  channel        Channel
+  state          ConsentState
+  /// form | import | conversion | manual | confirmation | unsubscribe
+  basis          String
+  /// What they saw or did, in words. The sentence beside the checkbox, the
+  /// name of the CSV column, the form of words an owner attested to.
+  evidence       String
+  ip             String?
+  userAgent      String?
+  /// The form, import batch, or conversion this came from.
+  sourceId       String?
+  at             DateTime     @default(now())
+
+  @@index([organizationId, contactId])
+  @@index([contactId, channel, at])
+}
+
+/// A page or embed that collects an address, with the wording it collects it
+/// under.
+model SignupForm {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  brandId        String?
+  brand          Brand?       @relation(fields: [brandId], references: [id])
+  name           String
+  /// Public, unguessable enough not to be enumerated, short enough to embed.
+  slug           String       @unique
+  headline       String
+  blurb          String?
+  /// The sentence beside the checkbox. Copied onto every consent record it
+  /// produces, so editing the form cannot rewrite the past.
+  consentText    String
+  askPhone       Boolean      @default(false)
+  smsConsentText String?
+  /// Confirm by email before counting as subscribed.
+  ///
+  /// Defaults on. A single-opt-in list looks bigger and delivers worse: it
+  /// fills with typos and with addresses whose owners never asked, and both
+  /// of those bounce, and bounces are what mailbox providers score you on.
+  doubleOptIn    Boolean      @default(true)
+  redirectUrl    String?
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId])
+}
+
+/// A single-use link that turns a pending subscription into a real one.
+///
+/// Stored as a hash, for the same reason session tokens are: a database that
+/// leaks should not hand over the ability to confirm subscriptions on behalf
+/// of other people.
+model ConfirmationToken {
+  id          String    @id @default(cuid())
+  contactId   String
+  contact     Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  channel     Channel
+  tokenHash   String    @unique
+  expiresAt   DateTime
+  confirmedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([contactId, channel])
+}
