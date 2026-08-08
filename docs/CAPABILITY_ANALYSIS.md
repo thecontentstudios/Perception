@@ -397,7 +397,7 @@ Asked directly: what else, and how does it get *easy*? Measured against the
 code: the loops all close now — post, send, hear, answer, plan, settle,
 attribute. What remains is friction and distance, in four places.
 
-### Phase 21 — Advise to act in one motion (advertising)
+### Phase 21 — Advise to act in one motion (advertising) — **done**
 
 The pathway recommends a route and then abandons you: "Plan this" should
 land in the flight planner **pre-filled** — channel, the platform's budget
@@ -406,8 +406,13 @@ intel, the campaign already chosen. Flights gain an optional image from the
 media library (every ads manager asks for one; the brief should hand it
 over). And where a platform accepts a structured import file, the brief
 grows one — Google Ads Editor CSV first — so "paste this into their tool"
-becomes "upload this file". The measure of done: from recommendation to a
-brief in the owner's hand in under a minute, nothing retyped.
+becomes "upload this file". Shipped: "Plan this" on any paid route lands in the planner with the
+channel, floor budget and brand-seeded audience filled in; the brief names
+one of the campaign's own images as the creative so the ad matches the
+feed; and the brief downloads as a file that survives the tab. The
+platform-import file (Google Ads Editor CSV) waits for a Google-first
+route to want it — the recommended channels are Meta-first, whose bulk
+format is account-specific.
 
 ### Phase 22 — The money grades itself (pricing)
 

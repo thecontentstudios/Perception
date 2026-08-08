@@ -1722,6 +1722,31 @@ async function main() {
         ? ok(`campaign cost-per-result is exact spend over measured results (${emailRow.exactCents}\u00a2 / ${emailRow.conversions})`)
         : bad(`email cost row: ${JSON.stringify(emailRow)}`);
 
+      // Phase 21: the brief names the campaign's own image, so the ad and
+      // the feed match without the owner hunting through folders.
+      const briefAsset = await db.mediaAsset.create({
+        data: {
+          organizationId: orgId, kind: 'image', storageKey: 'bb/bb/' + '1'.repeat(64) + '.jpg',
+          fileName: 'spring-beds.jpg', mimeType: 'image/jpeg', sizeBytes: 10, altText: 'Fresh beds',
+        },
+      });
+      const briefVar = await db.channelVariation.findFirst({
+        where: { contentItem: { campaignId: campaign.id } }, select: { id: true },
+      });
+      if (briefVar) {
+        await db.variationMedia.create({ data: { variationId: briefVar.id, assetId: briefAsset.id } });
+        const handed = await fetch(`${BASE}/api/flights/${flight.flight.id}`, {
+          method: 'POST', headers: auth, body: JSON.stringify({ action: 'handoff' }),
+        }).then((r) => r.json());
+        // The campaign may already carry seeded images; the mechanism is
+        // "name one of the campaign's own files", not "name mine".
+        /Creative: use "[^"]+" from this campaign/.test(handed.brief?.text ?? '')
+          ? ok('the brief names one of the campaign\u2019s own images as the creative')
+          : bad(`brief creative missing: ${(handed.brief?.text ?? '').slice(0, 160)}`);
+        await db.variationMedia.deleteMany({ where: { assetId: briefAsset.id } });
+      }
+      await db.mediaAsset.delete({ where: { id: briefAsset.id } }).catch(() => {});
+
       // Another tenant's campaign rollup is a plain 404.
       const anon = await fetch(`${BASE}/api/campaigns/${campaign.id}/rollup`);
       anon.status === 401 || anon.status === 403

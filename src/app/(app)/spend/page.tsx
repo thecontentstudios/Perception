@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { AD_RATES, EMAIL_RATES, FIXED_COSTS, SMS_RATES, amount, money, range } from '@/lib/pricing';
 import { forecastMonth, projectAds, type AdPlan } from '@/lib/projection';
 import { CHANNEL_META } from '@/lib/channels';
-import { useApp } from '@/lib/store';
+import { BRANDS, useApp } from '@/lib/store';
 import { Collapsible, CollapseAll } from '@/components/Collapsible';
 import { PriceTag } from '@/components/PriceTag';
 import type { Channel } from '@/lib/types';
@@ -62,6 +62,33 @@ export default function SpendPage() {
   const [plans, setPlans] = useState<AdPlan[]>([
     { channel: 'facebook', dailyBudgetCents: 1500, days: 14 },
   ]);
+
+  /**
+   * Arriving from the pathway with `?plan=<channel>` pre-fills the planner:
+   * the recommended channel, the platform's own budget floor, and — with a
+   * `brand` — an audience sentence seeded from the industry. The
+   * recommendation used to end at an empty form on another screen, which is
+   * the distance between advice and action this closes.
+   */
+  const [seed, setSeed] = useState<{ audience: string; objective: string } | null>(null);
+  useEffect(() => {
+    // window.location rather than useSearchParams: the hook demands a
+    // Suspense boundary at build time, and a one-shot read on mount is all
+    // an arrival parameter needs.
+    const search = new URLSearchParams(window.location.search);
+    const wanted = search.get('plan');
+    if (!wanted || !(wanted in AD_RATES)) return;
+    const rate = AD_RATES[wanted as keyof typeof AD_RATES]!;
+    setPlans([{ channel: wanted as AdPlan['channel'], dailyBudgetCents: Math.max(rate.minDailyCents, 1500), days: 14 }]);
+    const brand = BRANDS.find((b) => b.id === search.get('brand'));
+    if (brand) {
+      setSeed({
+        audience: `People near ${brand.name} who need ${brand.industry.toLowerCase()} help, 25 and up`,
+        objective: `Bring ${brand.name} new local customers`,
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [capDollars, setCapDollars] = useState(500);
   const [hardStop, setHardStop] = useState(true);
 
@@ -106,8 +133,11 @@ export default function SpendPage() {
     // a dummy URL produces a flight whose conversions belong to nobody.
     const destinationUrl = window.prompt('Where should a click land? (your page for this offer)', 'https://');
     if (!destinationUrl) return;
-    const objective = window.prompt('What should this flight cause?', 'Bring in local customers') ?? 'Bring in local customers';
-    const audience = window.prompt('Who should it reach?', 'People near the business, 25 and up') ?? 'People near the business, 25 and up';
+    const objective =
+      window.prompt('What should this flight cause?', seed?.objective ?? 'Bring in local customers') ?? 'Bring in local customers';
+    const audience =
+      window.prompt('Who should it reach?', seed?.audience ?? 'People near the business, 25 and up') ??
+      'People near the business, 25 and up';
     const r = await fetch('/api/flights', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -594,6 +624,22 @@ export default function SpendPage() {
                 )}
                 <button type="button" className="btn ghost" onClick={() => void navigator.clipboard.writeText(brief.text)}>
                   Copy brief
+                </button>
+                <button
+                  type="button"
+                  className="btn ghost"
+                  onClick={() => {
+                    // A file survives the tab; a clipboard does not. The name
+                    // carries the flight id so two briefs never collide.
+                    const blob = new Blob([brief.text], { type: 'text/plain' });
+                    const a = document.createElement('a');
+                    a.href = URL.createObjectURL(blob);
+                    a.download = `ad-brief-${brief.id}.txt`;
+                    a.click();
+                    URL.revokeObjectURL(a.href);
+                  }}
+                >
+                  Download
                 </button>
                 <button type="button" className="btn ghost" onClick={() => setBrief(null)} aria-label="Close brief">
                   ✕

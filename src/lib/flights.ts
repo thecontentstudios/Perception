@@ -255,7 +255,10 @@ export function briefFor(flight: {
   days: number;
   estImpressionsLow: number;
   estImpressionsHigh: number;
-}): FlightBrief {
+}, opts: {
+  /** File name of a campaign image the ad should use, when one exists. */
+  creativeFileName?: string;
+} = {}): FlightBrief {
   const ch = flight.channel.toLowerCase() as Channel;
   const manager = ADS_MANAGERS[ch] ?? { name: 'the platform’s ads manager', url: '' };
   const rate = AD_RATES[ch];
@@ -267,6 +270,12 @@ export function briefFor(flight: {
     ``,
     `Objective: ${flight.objective}`,
     `Audience: ${flight.audience}`,
+    ...(opts.creativeFileName
+      ? [
+          ``,
+          `Creative: use "${opts.creativeFileName}" from this campaign's media library — the same image the organic posts carry, so the ad and the feed match.`,
+        ]
+      : []),
     ``,
     `Budget: $${(flight.dailyCents / 100).toFixed(2)}/day for ${flight.days} days — $${(total / 100).toFixed(2)} total.`,
     `Set the budget as DAILY, not lifetime, and set an end date so it stops on its own.`,

@@ -1384,6 +1384,37 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
     go.length > 0 ? ok(`${go.length} steps have somewhere to go`) : bad('setup steps are prose with no action');
   }
 
+  console.log('\n== 22b. The recommendation lands in a filled-in planner ==');
+  {
+    await page.goto('http://localhost:3000/spend?plan=nextdoor&brand=b-green', { waitUntil: 'networkidle' });
+    await page.waitForTimeout(600);
+    // The planner's channel select is the one whose options include ad
+    // channels — the page has other selects (brand, campaign) before it.
+    const chan = await page.$$eval('select', (ns) => {
+      const el = ns.find((n) => [...n.options].some((o) => o.value === 'nextdoor'));
+      return el ? el.value : null;
+    });
+    chan === 'nextdoor'
+      ? ok('arriving from the pathway pre-fills the recommended channel')
+      : bad(`planner channel after ?plan=nextdoor: ${chan}`);
+    const daily = await page.$$eval('input[type="number"]', (ns) => ns.map((n) => Number(n.value)));
+    daily.some((v) => v >= 5)
+      ? ok('and the budget starts at the platform\u2019s floor, not zero')
+      : bad(`daily inputs: ${daily.join(',')}`);
+  }
+
+  // The matrix ships pre-folded now — reading it means opening it first,
+  // the same way an owner would.
+  {
+    await page.goto('http://localhost:3000/advertise', { waitUntil: 'networkidle' });
+    await page.waitForTimeout(400);
+    const toggle = await page.$('button.collapsible-toggle:has-text("What each one can actually do")');
+    if (toggle) {
+      const sectionClosed = await toggle.evaluate((e) => e.closest('.collapsible')?.classList.contains('closed'));
+      if (sectionClosed) { await toggle.click(); await page.waitForTimeout(400); }
+    }
+  }
+
   console.log('\n== 23. Capability matrix: the "no" cells carry the signal ==');
   const noCells = await page.$$eval('.cap-cell.no', (n) => n.length);
   const yesCells = await page.$$eval('.cap-cell.yes', (n) => n.length);

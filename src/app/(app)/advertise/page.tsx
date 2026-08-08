@@ -110,7 +110,7 @@ export default function AdvertisePage() {
               place, and none of which should come before the list you already have.
             </p>
           </div>
-          <Link className="btn primary hr-go" href={hrefFor(best)}>
+          <Link className="btn primary hr-go" href={hrefFor(best, brandId)}>
             {best.channel === 'email' || best.channel === 'sms' ? 'Write it' : 'Open it'}
           </Link>
         </div>
@@ -147,6 +147,7 @@ export default function AdvertisePage() {
           openRoute={openRoute}
           setOpenRoute={setOpenRoute}
           industryNamed={brandId !== 'all'}
+          brandId={brandId}
         />
       ))}
 
@@ -171,10 +172,15 @@ export default function AdvertisePage() {
   );
 }
 
-function hrefFor(r: Route): string {
+function hrefFor(r: Route, brandId?: string): string {
   if (r.channel === 'email' || r.channel === 'sms') return '/send';
   if (r.id === 'organic') return '/post';
-  return '/spend';
+  // The recommendation lands in the planner already filled in — channel,
+  // the platform's own budget floor, the brand for an audience seed. The
+  // pathway used to advise a route and then abandon you at an empty form.
+  const params = new URLSearchParams({ plan: r.channel });
+  if (brandId && brandId !== 'all') params.set('brand', brandId);
+  return `/spend?${params.toString()}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -197,6 +203,7 @@ const SHORTLIST = 4;
 function RouteGroupSection({
   group,
   routes,
+  brandId,
   openRoute,
   setOpenRoute,
   industryNamed,
@@ -206,6 +213,7 @@ function RouteGroupSection({
   openRoute: string | null;
   setOpenRoute: (id: string | null) => void;
   industryNamed: boolean;
+  brandId?: string;
 }) {
   const [showAll, setShowAll] = useState(false);
   if (routes.length === 0) return null;
@@ -238,6 +246,7 @@ function RouteGroupSection({
             route={r}
             open={openRoute === r.id}
             onToggle={() => setOpenRoute(openRoute === r.id ? null : r.id)}
+            brandId={brandId}
           />
         ))}
       </div>
@@ -266,7 +275,7 @@ const READY_LABEL: Record<Route['readiness'], string> = {
   unavailable: 'Not available yet',
 };
 
-function RouteCard({ route, open, onToggle }: { route: Route; open: boolean; onToggle: () => void }) {
+function RouteCard({ route, open, onToggle, brandId }: { route: Route; open: boolean; onToggle: () => void; brandId?: string }) {
   const meta = CHANNEL_META[route.channel];
   const outstanding = route.steps.filter((s) => !s.done);
   const people = peopleSentence(route);
@@ -333,7 +342,7 @@ function RouteCard({ route, open, onToggle }: { route: Route; open: boolean; onT
             </>
           )}
 
-          <Link className="btn primary rc-go" href={hrefFor(route)}>
+          <Link className="btn primary rc-go" href={hrefFor(route, brandId)}>
             {route.readiness === 'ready'
               ? route.channel === 'email' || route.channel === 'sms'
                 ? 'Write it'

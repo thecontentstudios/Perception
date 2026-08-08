@@ -39,7 +39,18 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       if (flight.status === 'planned') {
         await db.adFlight.update({ where: { id }, data: { status: 'handed_off', handedOffAt: new Date() } });
       }
-      return NextResponse.json({ ok: true, brief: briefFor(flight) });
+      // The ad should carry the campaign's own image when one exists — the
+      // brief names the file rather than leaving the owner to hunt for it.
+      const asset = flight.campaignId
+        ? await db.mediaAsset.findFirst({
+            where: {
+              kind: 'image',
+              usages: { some: { variation: { contentItem: { campaignId: flight.campaignId } } } },
+            },
+            select: { fileName: true },
+          })
+        : null;
+      return NextResponse.json({ ok: true, brief: briefFor(flight, { creativeFileName: asset?.fileName }) });
     }
 
     if (body.action === 'spend') {
