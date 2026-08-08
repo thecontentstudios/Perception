@@ -568,6 +568,10 @@ model Conversation {
   channel        Channel
   kind           String // comment | dm | mention | review | email_reply
   fromName       String
+  /// Where an answer goes: a phone number for SMS, a handle for social.
+  /// Without it the inbox can show what was said but never say anything
+  /// back — a "Mark replied" button pretending to be a reply.
+  fromAddress    String?
   externalRef    String?
   excerpt        String
   rating         Int?

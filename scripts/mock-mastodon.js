@@ -68,9 +68,9 @@ http
         // The behaviour the retry policy leans on: the same key returns the
         // original status rather than creating a second one.
         if (key && byKey.has(key)) return send(res, 200, byKey.get(key));
-        const { status, media_ids } = JSON.parse(body || '{}');
+        const { status, media_ids, in_reply_to_id } = JSON.parse(body || '{}');
         const attachments = (media_ids || []).map((id) => mediaStore.get(String(id))).filter(Boolean);
-        const post = { id: String(posts.length + 1), url: `http://localhost:${port}/@greenscape/${posts.length + 1}`, content: status, media_attachments: attachments };
+        const post = { id: String(posts.length + 1), url: `http://localhost:${port}/@greenscape/${posts.length + 1}`, content: status, media_attachments: attachments, in_reply_to_id: in_reply_to_id ?? null };
         posts.push(post);
         if (key) byKey.set(key, post);
         send(res, 200, post);

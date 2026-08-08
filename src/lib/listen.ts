@@ -70,6 +70,7 @@ async function record(
     channel: 'MASTODON' | 'BLUESKY';
     kind: string;
     fromName: string;
+    fromAddress: string | null;
     externalRef: string;
     excerpt: string;
     receivedAt: Date;
@@ -117,6 +118,7 @@ async function pollMastodon(organizationId: string, out: ListenResult): Promise<
         channel: 'MASTODON',
         kind: 'mention',
         fromName: n.account?.display_name || n.account?.acct || 'Someone on Mastodon',
+        fromAddress: n.account?.acct ? `@${n.account.acct}` : null,
         externalRef: `mastodon:${n.status.id}`,
         excerpt: stripHtml(n.status.content ?? '').slice(0, 280),
         receivedAt: n.created_at ? new Date(n.created_at) : new Date(),
@@ -161,6 +163,7 @@ async function pollBluesky(organizationId: string, out: ListenResult): Promise<v
         channel: 'BLUESKY',
         kind: n.reason === 'reply' ? 'comment' : 'mention',
         fromName: n.author?.displayName || n.author?.handle || 'Someone on Bluesky',
+        fromAddress: n.author?.handle ? `@${n.author.handle}` : null,
         externalRef: `bluesky:${n.uri}`,
         excerpt: (n.record?.text ?? '').slice(0, 280),
         receivedAt: n.indexedAt ? new Date(n.indexedAt) : new Date(),

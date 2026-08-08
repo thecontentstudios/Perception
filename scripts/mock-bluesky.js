@@ -66,6 +66,16 @@ http
       return send(res, 200, { ok: true, staged: notifications.length });
     }
 
+    // getPosts — how the metrics reader and the reply path look a post up.
+    if (req.url.startsWith('/xrpc/app.bsky.feed.getPosts') && req.method === 'GET') {
+      if (auth !== TOKEN) return send(res, 400, { error: 'InvalidToken', message: 'invalid token' });
+      const wanted = new URL(req.url, 'http://x').searchParams.getAll('uris');
+      const posts = records
+        .filter((r) => wanted.includes(r.uri))
+        .map((r) => ({ uri: r.uri, cid: r.cid, record: { text: r.text, reply: r.reply ?? undefined } }));
+      return send(res, 200, { posts });
+    }
+
     if (req.url === '/xrpc/com.atproto.repo.uploadBlob' && req.method === 'POST') {
       if (auth !== TOKEN) return send(res, 400, { error: 'InvalidToken', message: 'invalid token' });
       const body = await readBody(req);
@@ -94,8 +104,9 @@ http
         }
       }
       const uri = `at://${body.repo}/app.bsky.feed.post/${rkey}`;
-      records.push({ uri, text: record.text, embed: record.embed ?? null });
-      return send(res, 200, { uri, cid: `bafyrei${crypto.randomBytes(12).toString('hex')}` });
+      const cid = `bafyrei${crypto.randomBytes(12).toString('hex')}`;
+      records.push({ uri, cid, text: record.text, embed: record.embed ?? null, reply: record.reply ?? null });
+      return send(res, 200, { uri, cid });
     }
 
     send(res, 404, { error: 'MethodNotImplemented', message: 'Unknown xrpc method' });

@@ -28,6 +28,7 @@ export default function InboxPage() {
   const { state, dispatch, campaignById, brandById } = useApp();
   const [kind, setKind] = useState<ConversationKind | 'all'>('all');
   const [showDone, setShowDone] = useState(false);
+  const [sending, setSending] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [reply, setReply] = useState('');
   const [sent, setSent] = useState<string | null>(null);
@@ -146,22 +147,42 @@ export default function InboxPage() {
             <div style={{ display: 'flex', gap: 8 }}>
               <button
                 className="btn primary"
-                disabled={!reply.trim()}
+                disabled={!reply.trim() || sending}
                 onClick={() => {
-                  dispatch({ type: 'conversationStatus', conversationId: selected.id, status: 'replied' });
-                  setSent('Reply sent from your connected account.');
-                  setReply('');
+                  // The reply actually goes out — a status with
+                  // in_reply_to_id, a threaded Bluesky post, or a text
+                  // through the same adapter campaigns use. The old version
+                  // of this button flipped a flag and *claimed* it had sent.
+                  setSending(true);
+                  setSent(null);
+                  fetch(`/api/inbox/${selected.id}/reply`, {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({ text: reply }),
+                  })
+                    .then((r) => r.json())
+                    .then((d) => {
+                      if (d.ok) {
+                        dispatch({ type: 'conversationStatus', conversationId: selected.id, status: 'replied' });
+                        setSent(`Sent on ${selected.channel}.`);
+                        setReply('');
+                      } else {
+                        setSent(`Not sent: ${d.reason ?? 'something went wrong.'}`);
+                      }
+                    })
+                    .catch(() => setSent('Not sent: could not reach the server.'))
+                    .finally(() => setSending(false));
                 }}
               >
-                Send reply
+                {sending ? 'Sending…' : 'Send reply'}
               </button>
               <button className="btn" onClick={() => dispatch({ type: 'conversationStatus', conversationId: selected.id, status: 'done' })}>
                 Mark handled
               </button>
             </div>
             {sent && (
-              <div className="notice success" style={{ marginTop: 10 }}>
-                ✓ {sent}
+              <div className={`notice ${sent.startsWith('Not sent') ? 'warn' : 'success'}`} style={{ marginTop: 10 }}>
+                {sent.startsWith('Not sent') ? sent : `✓ ${sent}`}
               </div>
             )}
           </aside>

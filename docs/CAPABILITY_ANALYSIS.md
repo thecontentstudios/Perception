@@ -343,7 +343,7 @@ text-first with images optional. Both report reach (`impressions` / `views`)
 and both readers feed the report; registry at 5 of 18, and the two added are
 the two the fit ranking recommends after Facebook.
 
-### Phase 15 — The product can hear — **done**
+### Phase 15 — The product can hear — **done, and it answers**
 
 Replies into the inbox through the grants already held: Mastodon mentions and
 Bluesky replies/mentions/quotes, polled by the worker every few minutes.
@@ -354,6 +354,18 @@ only asks the owner to answer words. Both the inbox poll and the metrics
 refresh (now a worker duty, not a button) write a visible last-run, and the
 report says "platform numbers as of" — a stale number can look stale.
 Facebook comment webhooks wait on app review, stated rather than faked.
+
+**The answering half** (August 8): the inbox's "Send reply" button used to
+flip a status flag and claim "Reply sent from your connected account." It
+now sends: a Mastodon status threaded with `in_reply_to_id`, a Bluesky post
+carrying reply refs with the parent's real cid and the thread's true root
+(answering mid-thread with the parent as root would fork the conversation),
+and a text through the same Twilio adapter campaigns use — priced from the
+exact string that goes out and charged through the same ledger. STOP still
+means stop: a reply to someone who opted out after asking is refused in
+words, because "they messaged us first" does not reopen a withdrawn
+invitation. A conversation is marked replied because a reply exists, never
+before.
 
 ### Phase 16 — Close the ad loop — **done**
 

@@ -263,6 +263,8 @@ async function main() {
 
   await tierSection();
 
+  await replySection();
+
   await cleanup();
 }
 
@@ -865,6 +867,151 @@ async function tierSection() {
       : bad(`nextdoor: ${JSON.stringify(nd)}`);
   } finally {
     removeGrant('reddit');
+  }
+}
+
+
+/**
+ * The product can answer — the other half of hearing.
+ *
+ * The inbox's "Send reply" button used to flip a status flag and claim
+ * "Reply sent from your connected account." This drives real replies through
+ * each channel's real wire shape and checks the one refusal that matters
+ * most: STOP means stop, even mid-conversation.
+ */
+async function replySection() {
+  console.log('\n== The inbox answers, and STOP still means stop ==');
+
+  const BSKY = process.env.BLUESKY_PDS_URL || 'http://localhost:4326';
+  const TWILIO = process.env.TWILIO_BASE_URL || 'http://localhost:4324';
+  await fetch(`${MOCK}/__reset`, { method: 'POST' });
+  await fetch(`${BSKY}/__reset`, { method: 'POST' });
+  await fetch(`${TWILIO}/__reset`, { method: 'POST' });
+
+  const { sendReply } = await import('../src/lib/reply');
+  const { pollSocialInbox } = await import('../src/lib/listen');
+  const { __installSender, __resetSenders } = await import('../src/lib/senders/registry');
+  const { twilioSender } = await import('../src/lib/senders/twilio');
+  const { suppress, unsuppress } = await import('../src/lib/suppression');
+
+  saveGrant({
+    channel: 'mastodon', accessToken: process.env.MOCK_TOKEN || 'mock-access-token',
+    refreshToken: null, expiresInSec: null, scopes: ['write:statuses'],
+    accountLabel: '@greenscape', externalAccountId: `${HOST}|1|500`,
+  });
+  saveGrant({
+    channel: 'bluesky', accessToken: process.env.MOCK_BSKY_TOKEN || 'mock-bsky-access-jwt',
+    refreshToken: 'mock-refresh', expiresInSec: 7200, scopes: ['app-password session'],
+    accountLabel: '@greenscape.bsky.social', externalAccountId: 'did:plc:mockmockmock',
+  });
+
+  try {
+    // --- Mastodon: mention in, threaded status out -----------------------
+    await fetch(`${MOCK}/__notify`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'mention', from: 'Dana Whitfield', text: 'Do you service the north side?', statusId: 888001 }),
+    });
+    await pollSocialInbox(ORG_ID);
+    const mastoConvo = await db.conversation.findFirst({
+      where: { organizationId: ORG_ID, externalRef: 'mastodon:888001' },
+    });
+    if (!mastoConvo) return bad('the staged mention never reached the inbox');
+
+    const mastoReply = await sendReply(ORG_ID, mastoConvo.id, 'We do! Booking link in our bio.');
+    mastoReply.ok ? ok('mastodon reply accepted') : bad(`mastodon reply: ${JSON.stringify(mastoReply)}`);
+    const mastoWire = await fetch(`${MOCK}/__posts`).then((r) => r.json());
+    const threaded = mastoWire.posts.find((p: { in_reply_to_id?: string }) => p.in_reply_to_id === '888001');
+    threaded ? ok('and it is threaded — in_reply_to_id names the question') : bad('reply not threaded to the mention');
+    (await db.conversation.findUnique({ where: { id: mastoConvo.id } }))?.status === 'replied'
+      ? ok('the conversation is marked replied because a reply exists, not before')
+      : bad('status not replied after a real send');
+
+    // --- Bluesky: reply in, threaded record out with true root -----------
+    // Create the parent post on the PDS first so the reply has a cid to cite.
+    const parentRes = await fetch(`${BSKY}/xrpc/com.atproto.repo.createRecord`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${process.env.MOCK_BSKY_TOKEN || 'mock-bsky-access-jwt'}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ repo: 'did:plc:marcus', collection: 'app.bsky.feed.post', record: { text: 'Do you do weekends?' } }),
+    }).then((r) => r.json());
+    await fetch(`${BSKY}/__notify`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ reason: 'reply', from: 'Marcus Cole', text: 'Do you do weekends?', uri: parentRes.uri }),
+    });
+    await pollSocialInbox(ORG_ID);
+    const bskyConvo = await db.conversation.findFirst({
+      where: { organizationId: ORG_ID, externalRef: `bluesky:${parentRes.uri}` },
+    });
+    if (!bskyConvo) return bad('the staged bluesky reply never reached the inbox');
+
+    const bskyReply = await sendReply(ORG_ID, bskyConvo.id, 'Saturdays, yes — book by Thursday.');
+    bskyReply.ok ? ok('bluesky reply accepted') : bad(`bluesky reply: ${JSON.stringify(bskyReply)}`);
+    const bskyWire = await fetch(`${BSKY}/__posts`).then((r) => r.json());
+    const rec = bskyWire.records.find((r: { reply?: { parent?: { uri: string } } }) => r.reply?.parent?.uri === parentRes.uri);
+    rec && rec.reply.parent.cid === parentRes.cid
+      ? ok('the record carries reply refs with the parent\u2019s real cid')
+      : bad(`bluesky reply refs: ${JSON.stringify(rec?.reply)}`);
+
+    // --- SMS: question in via the real webhook, answer out, STOP refusal --
+    const phone = '+14155550142';
+    await db.contact.deleteMany({ where: { organizationId: ORG_ID, phone } });
+    await db.contact.create({
+      data: {
+        organizationId: ORG_ID, name: 'Tessa Nguyen', email: 'tessa-reply@example.com', phone,
+        emailConsent: 'SUBSCRIBED', smsConsent: 'SUBSCRIBED', source: 'reply test',
+      },
+    });
+    const inbound = await fetch(`${TWILIO}/__inbound`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ from: phone, body: 'Can you fit me in Tuesday?' }),
+    }).then((r) => r.json());
+    inbound.appStatus === 200 ? ok('the question arrived through the signed webhook') : bad(`inbound: ${JSON.stringify(inbound)}`);
+
+    const smsConvo = await db.conversation.findFirst({
+      where: { organizationId: ORG_ID, channel: 'SMS', fromAddress: phone },
+      orderBy: { receivedAt: 'desc' },
+    });
+    if (!smsConvo) return bad('the SMS question has no conversation row');
+    smsConvo.fromAddress === phone
+      ? ok('the conversation carries the number an answer goes to')
+      : bad(`fromAddress: ${smsConvo.fromAddress}`);
+
+    __installSender('sms', twilioSender({
+      accountSid: process.env.MOCK_TWILIO_SID || 'ACmock00000000000000000000000000',
+      authToken: process.env.MOCK_TWILIO_TOKEN || 'mock-twilio-auth-token',
+      from: '+15550001111', baseUrl: TWILIO,
+    }));
+    try {
+      const before = (await fetch(`${TWILIO}/__messages`).then((r) => r.json())).messages.length;
+      const smsReply = await sendReply(ORG_ID, smsConvo.id, 'Tuesday 2pm works - see you then!');
+      smsReply.ok ? ok('the text reply went out through the real adapter') : bad(`sms reply: ${JSON.stringify(smsReply)}`);
+      const wire = await fetch(`${TWILIO}/__messages`).then((r) => r.json());
+      wire.messages.length === before + 1 && wire.messages[wire.messages.length - 1].to === phone
+        ? ok('and reached the carrier, addressed to the asker')
+        : bad('reply did not reach the carrier');
+      const charged = await db.spendEntry.findFirst({ where: { organizationId: ORG_ID, providerRef: smsReply.ok ? smsReply.providerRef! : '' } });
+      charged && charged.cents >= 1
+        ? ok(`and was charged like any other message (${charged.cents}\u00a2)`)
+        : bad('the reply was not charged');
+
+      // STOP after asking does not reopen the door.
+      await suppress({ organizationId: ORG_ID, channel: 'sms', address: phone, reason: 'unsubscribe', detail: 'reply test STOP' });
+      const refused = await sendReply(ORG_ID, smsConvo.id, 'One more thing...');
+      !refused.ok && /opted out/.test(refused.error)
+        ? ok('a reply to someone who has since texted STOP is refused, in words')
+        : bad(`post-STOP reply: ${JSON.stringify(refused)}`);
+      await unsuppress(ORG_ID, 'sms', phone);
+      await db.spendEntry.deleteMany({ where: { organizationId: ORG_ID, note: { contains: phone } } });
+    } finally {
+      __resetSenders();
+    }
+
+    // Cleanup.
+    await db.conversation.deleteMany({ where: { id: { in: [mastoConvo.id, bskyConvo.id, smsConvo.id] } } });
+    await db.consentRecord.deleteMany({ where: { contact: { phone } } });
+    await db.contact.deleteMany({ where: { organizationId: ORG_ID, phone } });
+  } finally {
+    removeGrant('mastodon');
+    removeGrant('bluesky');
   }
 }
 

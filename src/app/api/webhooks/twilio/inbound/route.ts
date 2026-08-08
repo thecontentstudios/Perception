@@ -121,6 +121,7 @@ export async function POST(req: Request) {
         channel: 'SMS',
         kind: 'sms_reply',
         fromName: contact.name,
+        fromAddress: from,
         externalRef: params.MessageSid ?? null,
         excerpt: body.trim().slice(0, 280),
         status: intent === 'other' ? 'open' : 'done',
