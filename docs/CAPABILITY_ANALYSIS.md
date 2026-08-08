@@ -391,4 +391,57 @@ submit with the first line as title, errors-inside-a-200 handled, score and
 comments read back, impressions honestly null (view counts are
 moderator-only). Remaining feasible: Pinterest, Google Business Profile.
 
+## The plan, continued — easy to advertise, understand, and price (August 8)
+
+Asked directly: what else, and how does it get *easy*? Measured against the
+code: the loops all close now — post, send, hear, answer, plan, settle,
+attribute. What remains is friction and distance, in four places.
+
+### Phase 21 — Advise to act in one motion (advertising)
+
+The pathway recommends a route and then abandons you: "Plan this" should
+land in the flight planner **pre-filled** — channel, the platform's budget
+floor, an audience sentence seeded from the brand's industry and discovery
+intel, the campaign already chosen. Flights gain an optional image from the
+media library (every ads manager asks for one; the brief should hand it
+over). And where a platform accepts a structured import file, the brief
+grows one — Google Ads Editor CSV first — so "paste this into their tool"
+becomes "upload this file". The measure of done: from recommendation to a
+brief in the owner's hand in under a minute, nothing retyped.
+
+### Phase 22 — The money grades itself (pricing)
+
+Estimates are honest today; make them *accountable*. Track estimated-vs-
+settled drift per platform and say it plainly — "your estimates ran within
+6% of invoices this quarter" — because a range that keeps being right is
+the thing that makes the next range trustworthy. A monthly statement view
+on /spend: what was estimated, what settled, the drift. And CSV import of
+platform spend reports (every ads manager exports one) so mid-flight
+numbers stop being typed by hand.
+
+### Phase 23 — The product explains itself weekly (understanding)
+
+Everything needed for a digest already computes: sends and their costs,
+flights and their results, replies waiting, one learning, the next
+suggested action. Compose it — a screen, and optionally an email through
+our own adapter — in the same plain language the product already speaks.
+An owner who reads one page a week should know what happened, what it
+cost (exact vs estimated, always distinguished), what came back, and the
+single next thing worth doing.
+
+### Phase 24 — From demo to yours (the need, not a want)
+
+The wall between this and a real business: **email and SMS credentials
+live in a .env file.** An owner cannot connect Resend or Twilio from any
+screen. Settings gains provider setup — keys stored encrypted like the
+OAuth grants, a domain-verification checklist (SPF/DKIM to copy-paste),
+send-a-test buttons, and provider health on /connections. Nothing else on
+this list matters to someone who cannot get past this.
+
+### Smaller adds, in fit order
+
+Campaign-level budget caps; contact and ledger CSV export (portability is
+trust); Pinterest and Google Business publishers; WhatsApp when Meta
+clears it.
+
 ## What is deliberately not on this list
