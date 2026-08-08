@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { SetupCard } from './SetupCard';
 import { useState } from 'react';
 import { CalendarCard } from '@/components/CalendarCard';
 import { VariationEditor } from '@/components/VariationEditor';
@@ -116,6 +117,8 @@ export default function HomePage() {
       <div className="grid cols-2">
         {/* Today's priorities */}
         <div className="card">
+          <SetupCard />
+
           <div className="card-head">
             <h3>Today’s priorities</h3>
           </div>

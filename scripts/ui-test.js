@@ -56,6 +56,24 @@ const bad = (m) => { fail.push(m); console.log('  FAIL ' + m); };
   console.log('  sections:', sections.join(', '));
   sections.length === 4 ? ok('four nav sections') : bad('expected 4 sections, got ' + sections.length);
 
+  console.log('\n== 1b. Home says what is set up and what is next ==');
+  {
+    await page.goto('http://localhost:3000/', { waitUntil: 'networkidle' });
+    await page
+      .waitForFunction(() => document.body.innerText.includes('Get set up'), { timeout: 15000 })
+      .catch(() => {});
+    const steps = await page.$$eval('[data-testid="setup-steps"] li', (n) => n.length).catch(() => 0);
+    steps >= 7 ? ok(`the setup card lists ${steps} live steps`) : bad(`setup card steps: ${steps}`);
+    const text = await page.evaluate(() => document.body.innerText);
+    /\d+ contacts|contacts\./.test(text)
+      ? ok('and the audience step carries the real count')
+      : bad('no live count on the setup card');
+    // The sections after this one operate on the calendar and assume the
+    // browser is still there from section 1 — put it back.
+    await page.goto('http://localhost:3000/calendar', { waitUntil: 'networkidle' });
+    await page.waitForTimeout(400);
+  }
+
   console.log('\n== 2. Nav collapse to rail + persistence ==');
   const wideNav = await page.$eval('.nav', (e) => e.getBoundingClientRect().width);
   await page.click('.nav-collapse');

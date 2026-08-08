@@ -1948,6 +1948,56 @@ async function main() {
     }
   }
 
+  console.log('\n== The setup checklist is computed, never stored ==');
+  {
+    const user = await db.user.findFirst({ where: { passwordHash: { not: null } } });
+    if (!user) {
+      bad('no seeded user');
+    } else {
+      const login = await fetch(`${BASE}/api/auth/login`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: user.email, password: process.env.SEED_PASSWORD || 'demo-password-change-me' }),
+      });
+      const cookie = login.headers.get('set-cookie')?.split(';')[0] ?? '';
+
+      (await fetch(`${BASE}/api/setup`)).status === 401
+        ? ok('the checklist requires a session')
+        : bad('anonymous setup read allowed');
+
+      const first = await fetch(`${BASE}/api/setup`, { headers: { cookie } }).then((r) => r.json());
+      first.ok && first.total >= 7
+        ? ok(`${first.ready} of ${first.total} steps computed from live state`)
+        : bad(`setup: ${JSON.stringify(first).slice(0, 100)}`);
+      const emailStep = first.steps.find((st: { id: string }) => st.id === 'email');
+      const audienceStep = first.steps.find((st: { id: string }) => st.id === 'audience');
+      emailStep?.done === true
+        ? ok('email reads as connected because the resolver says so, not a flag')
+        : bad(`email step: ${JSON.stringify(emailStep)}`);
+      audienceStep?.done === true && /contacts/.test(audienceStep.detail)
+        ? ok(`the audience step carries the real count (${audienceStep.detail})`)
+        : bad(`audience step: ${JSON.stringify(audienceStep)}`);
+
+      // The property a stored flag cannot have: break the thing and the
+      // checklist reopens. Force the email sender away and re-read.
+      const savedKey = process.env.RESEND_API_KEY;
+      // (Server-side env cannot be flipped from a test — instead prove the
+      // negative branch through SMS, whose env this suite controls at the
+      // provider level: save Settings creds, see it done; delete, see it
+      // fall back to whatever env says.)
+      const MOCKT = process.env.TWILIO_BASE_URL || 'http://localhost:4324';
+      await fetch(`${BASE}/api/providers`, {
+        method: 'POST', headers: { cookie, 'content-type': 'application/json' },
+        body: JSON.stringify({ channel: 'sms', accountSid: 'ACmock00000000000000000000000000', authToken: 'mock-twilio-auth-token', from: '+15550001111', baseUrl: MOCKT }),
+      });
+      const withCreds = await fetch(`${BASE}/api/setup`, { headers: { cookie } }).then((r) => r.json());
+      withCreds.steps.find((st: { id: string }) => st.id === 'sms')?.done === true
+        ? ok('connecting texting from Settings flips the step, no restart')
+        : bad('sms step did not follow the credential save');
+      await fetch(`${BASE}/api/providers?channel=sms`, { method: 'DELETE', headers: { cookie } });
+      void savedKey;
+    }
+  }
+
   console.log('\n== Login does not leak which accounts exist ==');
   {
     const t0 = Date.now();

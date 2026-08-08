@@ -448,6 +448,16 @@ real path and is charged the real cent. Honest DNS guidance instead of
 fake records: Resend shows the exact DKIM/SPF for your domain; we say so
 rather than inventing values.
 
+### The setup checklist (August 8) — **done**
+
+Convenience is not a wizard — it is knowing what is already true and what
+one thing to do next. Home opens with "Get set up": seven steps computed
+from running state (the sender resolver, the OAuth grants, the actual
+tables), never from a stored completed-flag — disconnect your email
+provider and the checklist reopens, which is the point. Each undone row
+links to the exact screen that fixes it and says why it matters in one
+sentence; fully set up, the card folds to one quiet line.
+
 ### Smaller adds, in fit order
 
 Campaign-level budget caps; contact and ledger CSV export (portability is
