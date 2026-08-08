@@ -1,6 +1,6 @@
 import { db } from '../db';
 import { recordCharge } from '../billing';
-import { senderFor } from '../senders/registry';
+import { orgSenderFor, senderFor } from '../senders/registry';
 import { renderEmail, renderSms, renderSubject } from '../senders/render';
 import { isSuppressed } from '../suppression';
 import { checkQuietHours, previewSms } from '../sms';
@@ -64,7 +64,6 @@ export async function dispatch(
   } = {}
 ): Promise<DispatchResult> {
   const limit = opts.limit ?? 200;
-  const sender = senderFor(channel);
   const table = channel === 'email' ? db.emailDelivery : db.smsDelivery;
 
   const queued = await (table as typeof db.emailDelivery).findMany({
@@ -87,7 +86,14 @@ export async function dispatch(
     note: null,
   };
 
-  if (!sender) {
+  // Whether ANY sender exists is now a per-organization question: the owner
+  // may have connected from Settings while the environment has nothing, or
+  // vice versa. The env-level check keeps the fast "held" answer for the
+  // common single-tenant nothing-configured case; a per-row resolve below
+  // handles the rest.
+  const anyRowOrg = queued[0]?.contact.organizationId;
+  const probe = anyRowOrg ? await orgSenderFor(anyRowOrg, channel) : senderFor(channel);
+  if (!probe) {
     // The real total, not the page size. Reporting `queued.length` here said
     // "200 messages waiting" for a backlog of 2,220, because that is the
     // batch limit — a number about our own pagination presented as a fact
@@ -104,6 +110,14 @@ export async function dispatch(
   const appUrl = (process.env.APP_URL ?? 'http://localhost:3000').replace(/\/+$/, '');
 
   for (const row of queued) {
+    // Settings-connected credentials win over the environment, per org — a
+    // multi-tenant deployment sends each tenant's mail with that tenant's
+    // key, not with whatever the host's .env happens to hold.
+    const sender = await orgSenderFor(row.contact.organizationId, channel);
+    if (!sender) {
+      result.held += 1;
+      continue;
+    }
     const to = channel === 'email' ? row.contact.email : row.contact.phone;
     if (!to) {
       await fail(channel, row.id, 'No address on the contact.');

@@ -5,7 +5,7 @@ import { reachFor } from '@/lib/audience';
 import { checkBudget, combine, projectEmail, projectSms, type Projection } from '@/lib/projection';
 import { previewRange, previewSms, quietHoursForAudience } from '@/lib/sms';
 import { EMAIL_RATES, SMS_RATES } from '@/lib/pricing';
-import { sendingStatus } from '@/lib/senders/registry';
+import { orgSendingStatus } from '@/lib/senders/registry';
 import { allocateCents, spendSplit } from '@/lib/billing';
 import { normalizeAddress, suppressedAmong } from '@/lib/suppression';
 import type { Contact } from '@/lib/types';
@@ -151,7 +151,7 @@ export async function POST(req: Request) {
 
     const settings = await organizationSettings(principal.organizationId);
     const sentThisMonth = await emailSentThisMonth(principal.organizationId);
-    const sending = sendingStatus(body.channel);
+    const sending = await orgSendingStatus(principal.organizationId, body.channel);
 
     let projection: Projection;
     let smsPreview: ReturnType<typeof previewSms> | null = null;

@@ -50,6 +50,7 @@ model Organization {
   suppressions   Suppression[]
   consentRecords ConsentRecord[]
   signupForms    SignupForm[]
+  providerCreds  ProviderCredential[]
 }
 
 model Brand {
@@ -879,6 +880,30 @@ model MessageBatch {
   texts  SmsDelivery[]
 
   @@index([organizationId, createdAt])
+}
+
+/// Sending-service credentials an owner entered from Settings.
+///
+/// The wall between a demo and a real business: RESEND_API_KEY in a .env
+/// file is a developer's configuration, and an owner does not have a .env
+/// file. Stored with the same envelope encryption the OAuth grants use, and
+/// never returned by any API — status responses carry a masked hint only.
+/// The environment remains a fallback so a self-hosted deployment can still
+/// configure by file.
+model ProviderCredential {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  channel        Channel
+  /// encrypt(JSON of the provider's fields). Shape differs per channel and
+  /// the registry is the only reader.
+  encrypted      String
+  /// Last characters of the key, for a status line that proves which key
+  /// without exposing it.
+  hint           String
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([organizationId, channel])
 }
 
 /// An address we must never send to again.

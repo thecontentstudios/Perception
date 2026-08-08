@@ -1,7 +1,7 @@
 import { db } from './db';
 import { getAccessToken } from './oauth/store';
 import { mastodonContext } from './publishers/mastodon';
-import { senderFor } from './senders/registry';
+import { orgSenderFor } from './senders/registry';
 import { recordCharge } from './billing';
 import { suppressedAmong, normalizeAddress } from './suppression';
 import { previewSms } from './sms';
@@ -185,7 +185,7 @@ async function replySms(
     };
   }
 
-  const sender = senderFor('sms');
+  const sender = await orgSenderFor(organizationId, 'sms');
   if (!sender) return { ok: false, error: 'No text messaging service is connected.' };
 
   // Priced the way a campaign message is priced: real segments at the real

@@ -145,6 +145,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ slug: s
     const link = await mintConfirmation(result.contactId, 'email', appUrl);
     const org = await db.organization.findUnique({ where: { id: form.organizationId }, select: { name: true } });
     const sent = await sendConfirmationEmail({
+      organizationId: form.organizationId,
       to: email,
       name: body.name ?? '',
       businessName: org?.name ?? 'us',

@@ -434,14 +434,19 @@ An owner who reads one page a week should know what happened, what it
 cost (exact vs estimated, always distinguished), what came back, and the
 single next thing worth doing.
 
-### Phase 24 — From demo to yours (the need, not a want)
+### Phase 24 — From demo to yours (the need, not a want) — **done**
 
-The wall between this and a real business: **email and SMS credentials
-live in a .env file.** An owner cannot connect Resend or Twilio from any
-screen. Settings gains provider setup — keys stored encrypted like the
-OAuth grants, a domain-verification checklist (SPF/DKIM to copy-paste),
-send-a-test buttons, and provider health on /connections. Nothing else on
-this list matters to someone who cannot get past this.
+Shipped. Settings gains a Sending services panel: Resend and Twilio
+credentials entered from the screen, encrypted with the same envelope the
+OAuth grants use, never echoed back (status shows the last four
+characters), applied without a restart, with the environment left as a
+deployment-wide fallback. Resolution order everywhere — dispatcher, replies,
+confirmations, composers — is Settings first, environment second, per
+organization, so a multi-tenant deployment sends each tenant's mail with
+that tenant's key. The proof of setup is a test message that travels the
+real path and is charged the real cent. Honest DNS guidance instead of
+fake records: Resend shows the exact DKIM/SPF for your domain; we say so
+rather than inventing values.
 
 ### Smaller adds, in fit order
 

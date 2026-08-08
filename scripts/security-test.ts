@@ -30,6 +30,23 @@ async function reachable(): Promise<boolean> {
 }
 
 async function main() {
+  // Rate limits are fixed windows shared through Redis, and the suite's own
+  // traffic fills them: two runs inside the same minute poison each other —
+  // one expects a 429 the other already consumed, or hits one it did not
+  // earn. Start from a clean window, the same way the mocks start from
+  // __reset. Scoped to rl:* so nothing else in Redis is touched.
+  try {
+    const { default: IORedis } = await import('ioredis');
+    const { redisConnection } = await import('../src/lib/queue');
+    const conn = new IORedis({ ...(redisConnection() as { host: string; port: number }), lazyConnect: true });
+    await conn.connect();
+    const keys = await conn.keys('rl:*');
+    if (keys.length > 0) await conn.del(...keys);
+    await conn.quit();
+  } catch {
+    // No Redis means the in-process fallback, which each run gets fresh.
+  }
+
   console.log('\n== Passwords ==');
   {
     const hash = await hashPassword('a-perfectly-fine-passphrase');
@@ -1850,6 +1867,84 @@ async function main() {
 
       await db.emailDelivery.deleteMany({ where: { providerRef: { startsWith: tag } } });
       await db.spendEntry.deleteMany({ where: { providerRef: `${tag}-spend` } });
+    }
+  }
+
+  console.log('\n== Providers connect from Settings, and secrets never come back ==');
+  {
+    const user = await db.user.findFirst({ where: { passwordHash: { not: null } } });
+    if (!user) {
+      bad('no seeded user');
+    } else {
+      const login = await fetch(`${BASE}/api/auth/login`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: user.email, password: process.env.SEED_PASSWORD || 'demo-password-change-me' }),
+      });
+      const cookie = login.headers.get('set-cookie')?.split(';')[0] ?? '';
+      const auth = { cookie, 'content-type': 'application/json' };
+      const orgId = (await db.membership.findFirst({ where: { userId: user.id } }))?.organizationId ?? '';
+      const MOCKT = process.env.TWILIO_BASE_URL || 'http://localhost:4324';
+
+      // Anonymous callers get nothing.
+      (await fetch(`${BASE}/api/providers`)).status === 401
+        ? ok('provider status requires a session')
+        : bad('anonymous provider read allowed');
+
+      // Bad shapes are refused with the reason.
+      const badSid = await fetch(`${BASE}/api/providers`, {
+        method: 'POST', headers: auth,
+        body: JSON.stringify({ channel: 'sms', accountSid: 'notasid', authToken: 'x', from: '+15550009999' }),
+      });
+      badSid.status === 422 ? ok('a malformed Account SID is refused before it can fail per message') : bad(`bad sid: ${badSid.status}`);
+
+      // Save real (stand-in) credentials through the API.
+      const secretToken = 'mock-twilio-auth-token';
+      const saved = await fetch(`${BASE}/api/providers`, {
+        method: 'POST', headers: auth,
+        body: JSON.stringify({ channel: 'sms', accountSid: 'ACmock00000000000000000000000000', authToken: secretToken, from: '+15550001111', baseUrl: MOCKT }),
+      }).then((r) => r.json());
+      saved.ok && saved.status?.source === 'settings'
+        ? ok('credentials saved from Settings take effect without a restart')
+        : bad(`save: ${JSON.stringify(saved).slice(0, 120)}`);
+
+      // The status endpoint proves which key without exposing it.
+      const statusBody = await fetch(`${BASE}/api/providers`, { headers: { cookie } }).then((r) => r.text());
+      !statusBody.includes(secretToken)
+        ? ok('the secret never appears in any response')
+        : bad('the auth token came back in the status payload');
+      JSON.parse(statusBody).sms?.hint === `\u2026${secretToken.slice(-4)}`
+        ? ok(`status carries a masked hint (${JSON.parse(statusBody).sms.hint})`)
+        : bad(`hint: ${JSON.parse(statusBody).sms?.hint}`);
+
+      // And the row in the database is ciphertext, not the key.
+      const row = await db.providerCredential.findFirst({ where: { organizationId: orgId, channel: 'SMS' } });
+      row && !row.encrypted.includes(secretToken)
+        ? ok('at rest it is ciphertext — a database dump does not hand over the key')
+        : bad('the credential row contains the plaintext token');
+
+      // A test message travels the real path and is charged like any other.
+      await fetch(`${MOCKT}/__reset`, { method: 'POST' });
+      const test = await fetch(`${BASE}/api/providers/test`, {
+        method: 'POST', headers: auth,
+        body: JSON.stringify({ channel: 'sms', to: '+15556667777' }),
+      }).then((r) => r.json());
+      test.ok ? ok(`the test message went out through ${test.provider}`) : bad(`test send: ${JSON.stringify(test).slice(0, 120)}`);
+      const wire = await fetch(`${MOCKT}/__messages`).then((r) => r.json());
+      wire.messages.some((m: { to: string }) => m.to === '+15556667777')
+        ? ok('and reached the carrier')
+        : bad('test message never reached the stand-in carrier');
+      const testCharge = await db.spendEntry.findFirst({ where: { organizationId: orgId, providerRef: test.providerRef ?? '' } });
+      testCharge ? ok(`and was charged (${testCharge.cents}\u00a2) — the test uses the real path`) : bad('test message was not charged');
+
+      // Disconnect falls back to the environment.
+      const dropped = await fetch(`${BASE}/api/providers?channel=sms`, { method: 'DELETE', headers: { cookie } }).then((r) => r.json());
+      dropped.ok && dropped.status?.source !== 'settings'
+        ? ok('disconnecting falls back to the environment, stated as such')
+        : bad(`disconnect: ${JSON.stringify(dropped).slice(0, 120)}`);
+
+      // Cleanup.
+      await db.spendEntry.deleteMany({ where: { organizationId: orgId, note: { contains: '+15556667777' } } });
+      await db.providerCredential.deleteMany({ where: { organizationId: orgId } });
     }
   }
 

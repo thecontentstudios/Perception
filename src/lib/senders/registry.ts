@@ -99,3 +99,99 @@ export function __installSender(channel: SendChannel, sender: Sender | null): vo
 export function __resetSenders(): void {
   for (const key of Object.keys(OVERRIDES) as SendChannel[]) delete OVERRIDES[key];
 }
+
+// ---------------------------------------------------------------------------
+// Credentials an owner entered from Settings
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-organization senders, from the database, above the environment.
+ *
+ * Resolution order, most specific wins:
+ *   1. Test overrides (`__installSender`) — a test's world is absolute.
+ *   2. Credentials the owner saved from Settings, decrypted per org.
+ *   3. The environment — a deployment-wide fallback, so a self-hosted
+ *      install can still configure by file and the demo keeps working.
+ *
+ * Cached briefly per org: the dispatcher calls per row, and decrypting per
+ * message would be pure waste — but a save from Settings must take effect
+ * without a restart, so the cache is seconds, not sessions.
+ */
+interface OrgCredCache {
+  email: Sender | null;
+  sms: Sender | null;
+  at: number;
+}
+const ORG_CACHE = new Map<string, OrgCredCache>();
+const ORG_CACHE_TTL_MS = 15_000;
+
+/** Drop the cache — a save from Settings calls this so it applies now. */
+export function invalidateOrgSenders(organizationId?: string): void {
+  if (organizationId) ORG_CACHE.delete(organizationId);
+  else ORG_CACHE.clear();
+}
+
+async function loadOrgSenders(organizationId: string): Promise<OrgCredCache> {
+  const cached = ORG_CACHE.get(organizationId);
+  if (cached && Date.now() - cached.at < ORG_CACHE_TTL_MS) return cached;
+
+  const { db } = await import('../db');
+  const { decrypt, hasEncryptionKey } = await import('../oauth/crypto');
+  const built: OrgCredCache = { email: null, sms: null, at: Date.now() };
+
+  if (hasEncryptionKey()) {
+    const rows = await db.providerCredential.findMany({
+      where: { organizationId, channel: { in: ['EMAIL', 'SMS'] } },
+    });
+    for (const row of rows) {
+      try {
+        const creds = JSON.parse(decrypt(row.encrypted)) as Record<string, string>;
+        if (row.channel === 'EMAIL' && creds.apiKey && creds.from) {
+          built.email = resendSender({ apiKey: creds.apiKey, from: creds.from, baseUrl: creds.baseUrl || undefined });
+        }
+        if (row.channel === 'SMS' && creds.accountSid && creds.authToken && creds.from) {
+          const appUrl = (process.env.APP_URL ?? 'http://localhost:3000').replace(/\/+$/, '');
+          built.sms = twilioSender({
+            accountSid: creds.accountSid,
+            authToken: creds.authToken,
+            from: creds.from,
+            statusCallback: `${appUrl}/api/webhooks/twilio/status`,
+            baseUrl: creds.baseUrl || undefined,
+          });
+        }
+      } catch {
+        // A row that no longer decrypts (rotated key) is a fallback to env,
+        // not a crash — and Settings shows it as needing re-entry.
+      }
+    }
+  }
+
+  ORG_CACHE.set(organizationId, built);
+  return built;
+}
+
+/** The sender for this organization: Settings first, environment second. */
+export async function orgSenderFor(organizationId: string, channel: SendChannel): Promise<Sender | null> {
+  if (channel in OVERRIDES) return OVERRIDES[channel] ?? null;
+  const own = await loadOrgSenders(organizationId);
+  const fromDb = channel === 'email' ? own.email : own.sms;
+  return fromDb ?? senderFor(channel);
+}
+
+/** sendingStatus, but aware of what the owner connected from Settings. */
+export async function orgSendingStatus(
+  organizationId: string,
+  channel: SendChannel
+): Promise<{ ready: boolean; provider: string | null; why: string; source: 'settings' | 'env' | null }> {
+  if (channel in OVERRIDES) {
+    const s = sendingStatus(channel);
+    return { ...s, source: s.ready ? 'env' : null };
+  }
+  const own = await loadOrgSenders(organizationId);
+  const fromDb = channel === 'email' ? own.email : own.sms;
+  if (fromDb) {
+    return { ready: true, provider: fromDb.name, why: `Sending through ${fromDb.name}, connected from Settings.`, source: 'settings' };
+  }
+  const s = sendingStatus(channel);
+  return { ...s, source: s.ready ? 'env' : null };
+}

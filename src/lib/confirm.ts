@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { db } from './db';
-import { senderFor } from './senders/registry';
+import { orgSenderFor } from './senders/registry';
 import type { Channel } from './types';
 
 /**
@@ -129,12 +129,13 @@ export async function confirm(token: string): Promise<ConfirmOutcome> {
  * a batch window to finish signing up.
  */
 export async function sendConfirmationEmail(args: {
+  organizationId: string;
   to: string;
   name: string;
   businessName: string;
   url: string;
 }): Promise<{ ok: boolean; reason?: string }> {
-  const sender = senderFor('email');
+  const sender = await orgSenderFor(args.organizationId, 'email');
   if (!sender) {
     return {
       ok: false,

@@ -1,6 +1,7 @@
 'use client';
 
 import { UserChip } from '@/components/ui';
+import { SendingPanel } from './SendingPanel';
 import { fmtDateTime } from '@/lib/dates';
 import { ORG, USERS, useApp } from '@/lib/store';
 
@@ -65,6 +66,8 @@ export default function SettingsPage() {
             </tbody>
           </table>
         </div>
+
+        <SendingPanel />
 
         <div className="card card-pad">
           <h3 style={{ marginBottom: 8 }}>Roles</h3>

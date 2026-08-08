@@ -3,7 +3,7 @@ import { db, dbAvailable } from '@/lib/db';
 import { handle, require_, HttpError } from '@/lib/auth/guard';
 import { forecastMonth } from '@/lib/projection';
 import { spendSplit } from '@/lib/billing';
-import { sendingStatus } from '@/lib/senders/registry';
+import { orgSendingStatus } from '@/lib/senders/registry';
 import type { Channel } from '@/lib/types';
 import { budgetScope, monthKey } from '@/lib/ledger';
 
@@ -91,7 +91,10 @@ export async function GET(req: Request) {
     // Whether anything can actually send. A month-to-date of zero means
     // something very different depending on the answer: no campaigns, or no
     // way to run them.
-    const sending = { email: sendingStatus('email'), sms: sendingStatus('sms') };
+    const sending = {
+      email: await orgSendingStatus(principal.organizationId, 'email'),
+      sms: await orgSendingStatus(principal.organizationId, 'sms'),
+    };
 
     const forecast = forecastMonth({
       spentCents: exactCents,
