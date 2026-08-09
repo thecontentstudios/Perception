@@ -424,15 +424,17 @@ on /spend: what was estimated, what settled, the drift. And CSV import of
 platform spend reports (every ads manager exports one) so mid-flight
 numbers stop being typed by hand.
 
-### Phase 23 — The product explains itself weekly (understanding)
+### Phase 23 — The product explains itself weekly (understanding) — **done**
 
-Everything needed for a digest already computes: sends and their costs,
-flights and their results, replies waiting, one learning, the next
-suggested action. Compose it — a screen, and optionally an email through
-our own adapter — in the same plain language the product already speaks.
-An owner who reads one page a week should know what happened, what it
-cost (exact vs estimated, always distinguished), what came back, and the
-single next thing worth doing.
+Shipped. `composeDigest` folds the week into one page — what went out
+(posts, deliveries, flights handed off), what it cost with exact and
+estimated money split through summarisation, what came back, **one**
+learning (a real finding beats the drift grade beats an honest "not enough
+happened this week to learn from"), and **one** next action ranked by
+urgency: waiting replies beat everything, because those are people. It
+declines to pad — a quiet week reads as a quiet week. GET /api/digest for
+the screen; POST emails it to the owner through their own connected
+sender, the same path campaigns use.
 
 ### Phase 24 — From demo to yours (the need, not a want) — **done**
 

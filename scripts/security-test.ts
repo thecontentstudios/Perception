@@ -2056,6 +2056,54 @@ async function main() {
     }
   }
 
+  console.log('\n== The week on one page, and it declines to pad ==');
+  {
+    const user = await db.user.findFirst({ where: { passwordHash: { not: null } } });
+    if (!user) {
+      bad('no seeded user');
+    } else {
+      const login = await fetch(`${BASE}/api/auth/login`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: user.email, password: process.env.SEED_PASSWORD || 'demo-password-change-me' }),
+      });
+      const cookie = login.headers.get('set-cookie')?.split(';')[0] ?? '';
+
+      (await fetch(`${BASE}/api/digest`)).status === 401
+        ? ok('the digest requires a session')
+        : bad('anonymous digest read allowed');
+
+      const d = (await fetch(`${BASE}/api/digest`, { headers: { cookie } }).then((r) => r.json())).digest;
+      d && typeof d.text === 'string' && d.text.includes('YOUR WEEK')
+        ? ok('the digest composes as one page of text')
+        : bad(`digest: ${JSON.stringify(d).slice(0, 100)}`);
+      typeof d.cost.exactCents === 'number' && typeof d.cost.estimatedCents === 'number'
+        ? ok('money stays split exact/estimated through summarisation')
+        : bad(`cost: ${JSON.stringify(d.cost)}`);
+      d.learning.length > 10 && d.nextAction?.href
+        ? ok(`one learning, one next action ("${d.nextAction.label.slice(0, 48)}...")`)
+        : bad(`learning/next: ${JSON.stringify({ l: d.learning, n: d.nextAction }).slice(0, 120)}`);
+      !/estimated/.test(d.text) || d.cost.estimatedCents > 0
+        ? ok('estimated money is mentioned only when any exists — no padding')
+        : bad('the text mentions estimates it does not have');
+
+      // Emailing it goes through the org's own sender to the mock provider.
+      const MOCKR = process.env.RESEND_BASE_URL || 'http://localhost:4323';
+      await fetch(`${MOCKR}/__reset`, { method: 'POST' });
+      const sent = await fetch(`${BASE}/api/digest`, {
+        method: 'POST', headers: { cookie, 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      }).then((r) => r.json());
+      sent.ok && sent.to === user.email
+        ? ok(`the digest emails itself to the signed-in owner (${sent.to})`)
+        : bad(`digest send: ${JSON.stringify(sent).slice(0, 100)}`);
+      const wire = await fetch(`${MOCKR}/__messages`).then((r) => r.json());
+      const arrived = (wire.messages ?? wire.emails ?? []).some(
+        (m: { subject?: string }) => m.subject === 'Your week, on one page'
+      );
+      arrived ? ok('and it arrived through the real email path') : bad('digest email never reached the provider');
+    }
+  }
+
   console.log('\n== Login does not leak which accounts exist ==');
   {
     const t0 = Date.now();
