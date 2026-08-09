@@ -1599,6 +1599,64 @@ async function main() {
         ? ok('spend after settlement is refused — the invoice is the record now')
         : bad(`post-settlement spend gave ${lateSpend.status}`);
 
+      // ---- Phase 22: the money grades itself --------------------------
+      // A platform spend export imports as estimated entries, one per day,
+      // idempotent — re-importing an overlapping report cannot double money.
+      const csvFlight = await fetch(`${BASE}/api/flights`, {
+        method: 'POST', headers: auth,
+        body: JSON.stringify({
+          channel: 'facebook', dailyCents: 1500, days: 7, objective: 'CSV test', audience: 'Locals',
+          body: 'Ad', destinationUrl: 'https://summitlocal.test/csv',
+        }),
+      }).then((r) => r.json());
+      const csv = 'Date,Amount spent (USD)\n2026-08-05,"$12.40"\n2026-08-06,9.10\nnot-a-date,5.00\n2026-08-07,0\n';
+      const imp = await fetch(`${BASE}/api/flights/${csvFlight.flight.id}`, {
+        method: 'POST', headers: auth, body: JSON.stringify({ action: 'import-csv', csv }),
+      }).then((r) => r.json());
+      imp.ok && imp.imported === 2 && imp.skipped.length === 2
+        ? ok(`a platform CSV imports (${imp.imported} days), and the bad rows are named, not dropped`)
+        : bad(`csv import: ${JSON.stringify(imp).slice(0, 140)}`);
+      const again = await fetch(`${BASE}/api/flights/${csvFlight.flight.id}`, {
+        method: 'POST', headers: auth, body: JSON.stringify({ action: 'import-csv', csv }),
+      }).then((r) => r.json());
+      again.imported === 0 && again.duplicates === 2
+        ? ok('re-importing the same report doubles nothing')
+        : bad(`csv reimport: ${JSON.stringify(again).slice(0, 100)}`);
+
+      // Settle it and the flight remembers the number the invoice graded.
+      await fetch(`${BASE}/api/flights/${csvFlight.flight.id}`, {
+        method: 'POST', headers: auth, body: JSON.stringify({ action: 'settle', invoiceCents: 2350 }),
+      });
+      const graded = await db.adFlight.findUnique({ where: { id: csvFlight.flight.id } });
+      graded?.estimatedCentsAtSettle === 2150
+        ? ok('the flight stores what the estimates said at settlement (2150\u00a2 vs 2350\u00a2 invoiced)')
+        : bad(`estimatedCentsAtSettle: ${graded?.estimatedCentsAtSettle}`);
+
+      // Under three settled flights the report refuses to quote a percentage.
+      const few = await fetch(`${BASE}/api/flights`, { headers: { cookie } }).then((r) => r.json());
+      few.drift && few.drift.meanAbsDrift === null && /too few|not been graded/.test(few.drift.verdict)
+        ? ok('with a thin sample the drift report declines to quote a percentage')
+        : bad(`thin drift: ${JSON.stringify(few.drift).slice(0, 120)}`);
+
+      // With three, it grades itself in a sentence.
+      const extra = await db.adFlight.createMany({
+        data: [1, 2].map((n) => ({
+          id: `drift-test-${stampF}-${n}`, organizationId: orgId, channel: 'FACEBOOK',
+          status: 'settled', objective: 'x', audience: 'y', body: 'z',
+          destinationUrl: 'https://summitlocal.test/', dailyCents: 1000, days: 7,
+          estImpressionsLow: 1, estImpressionsHigh: 2,
+          settledCents: 1000 + n * 40, estimatedCentsAtSettle: 1000, settledAt: new Date(),
+        })),
+      });
+      void extra;
+      const gradedNow = await fetch(`${BASE}/api/flights`, { headers: { cookie } }).then((r) => r.json());
+      gradedNow.drift.meanAbsDrift !== null && /estimates ran within|missed invoices/.test(gradedNow.drift.verdict)
+        ? ok(`and with a sample it says so: "${gradedNow.drift.verdict.slice(0, 72)}..."`)
+        : bad(`drift verdict: ${JSON.stringify(gradedNow.drift).slice(0, 140)}`);
+
+      await db.spendEntry.deleteMany({ where: { flightId: csvFlight.flight.id } });
+      await db.adFlight.deleteMany({ where: { id: { in: [csvFlight.flight.id, `drift-test-${stampF}-1`, `drift-test-${stampF}-2`] } } });
+
       // ---- Phase 16: the loop closes — results beside the money ----------
       // The destination carries the flight's own id, so the snippet on the
       // landing page can send it back with every conversion.

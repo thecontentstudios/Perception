@@ -404,7 +404,15 @@ export async function settleFlight(
 
     await tx.adFlight.update({
       where: { id: flightId },
-      data: { status: 'settled', settledAt: new Date(), settledCents: invoiceCents },
+      data: {
+        status: 'settled',
+        settledAt: new Date(),
+        settledCents: invoiceCents,
+        // The number the invoice graded. Stored at the only moment it is
+        // knowable — after settlement the estimates have been flipped exact
+        // and the belief they represented is otherwise gone.
+        estimatedCentsAtSettle: estimatedCents,
+      },
     });
 
     return { ok: true, adjustmentCents };
@@ -421,3 +429,137 @@ function label(channel: Channel): string {
   };
   return LABELS[channel] ?? channel.charAt(0).toUpperCase() + channel.slice(1);
 }
+
+// ---------------------------------------------------------------------------
+// The estimates, graded
+// ---------------------------------------------------------------------------
+
+export interface DriftReport {
+  flights: {
+    id: string;
+    channel: string;
+    estimatedCents: number;
+    settledCents: number;
+    /** settled − estimated, as a fraction of estimated. Positive = invoice ran over. */
+    drift: number;
+  }[];
+  /** Mean absolute drift across settled flights, or null under the floor. */
+  meanAbsDrift: number | null;
+  verdict: string;
+}
+
+/**
+ * How the estimates have been scoring against invoices.
+ *
+ * A range that keeps being right is what makes the next range trustworthy —
+ * and a range that runs hot deserves to be said out loud, by the product,
+ * before an owner notices it themselves. Needs a sample: one settled flight
+ * is an anecdote, and the report says so instead of quoting a percentage
+ * built on it.
+ */
+export async function driftReport(organizationId: string): Promise<DriftReport> {
+  const settled = await db.adFlight.findMany({
+    where: { organizationId, status: 'settled', settledCents: { not: null }, estimatedCentsAtSettle: { not: null, gt: 0 } },
+    orderBy: { settledAt: 'desc' },
+    select: { id: true, channel: true, settledCents: true, estimatedCentsAtSettle: true },
+  });
+
+  const flights = settled.map((f) => ({
+    id: f.id,
+    channel: f.channel.toLowerCase(),
+    estimatedCents: f.estimatedCentsAtSettle!,
+    settledCents: f.settledCents!,
+    drift: (f.settledCents! - f.estimatedCentsAtSettle!) / f.estimatedCentsAtSettle!,
+  }));
+
+  if (flights.length === 0) {
+    return { flights, meanAbsDrift: null, verdict: 'No settled flights yet — the estimates have not been graded.' };
+  }
+  if (flights.length < 3) {
+    return {
+      flights,
+      meanAbsDrift: null,
+      verdict: `${flights.length} settled ${flights.length === 1 ? 'flight' : 'flights'} — too few to grade the estimates; a percentage built on this would be an anecdote wearing a number.`,
+    };
+  }
+
+  const meanAbsDrift = flights.reduce((a, f) => a + Math.abs(f.drift), 0) / flights.length;
+  const signed = flights.reduce((a, f) => a + f.drift, 0) / flights.length;
+  const pct = (x: number) => `${Math.round(Math.abs(x) * 100)}%`;
+  return {
+    flights,
+    meanAbsDrift,
+    verdict:
+      meanAbsDrift <= 0.1
+        ? `Across ${flights.length} settled flights, estimates ran within ${pct(meanAbsDrift)} of invoices${signed > 0.02 ? ', leaning under' : signed < -0.02 ? ', leaning over' : ''}. The ranges have been earning their trust.`
+        : `Across ${flights.length} settled flights, estimates missed invoices by ${pct(meanAbsDrift)} on average${signed > 0 ? ' (invoices ran higher)' : ' (invoices ran lower)'}. Treat the next range as wider than it looks.`,
+  };
+}
+
+/**
+ * Import a platform's spend export — the CSV every ads manager produces.
+ *
+ * Accepts the common shapes loosely (Date/Day + Amount/Spend/Cost columns,
+ * $ signs and thousands commas tolerated) and writes one estimated entry
+ * per day, idempotent on `flight:<id>:<date>` — re-importing an overlapping
+ * export cannot double the money. Rows that do not parse are counted and
+ * named, never silently dropped: a spend import that "mostly worked" is a
+ * ledger that is quietly wrong.
+ */
+export async function importFlightSpendCsv(
+  organizationId: string,
+  flightId: string,
+  csv: string
+): Promise<{ ok: boolean; error?: string; imported: number; duplicates: number; skipped: { line: number; reason: string }[] }> {
+  const flight = await db.adFlight.findFirst({ where: { id: flightId, organizationId } });
+  if (!flight) return { ok: false, error: 'No such flight.', imported: 0, duplicates: 0, skipped: [] };
+  if (flight.status === 'settled') {
+    return { ok: false, error: 'This flight has settled — the invoice is the record now.', imported: 0, duplicates: 0, skipped: [] };
+  }
+
+  const lines = csv.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (lines.length < 2) return { ok: false, error: 'The file has no data rows.', imported: 0, duplicates: 0, skipped: [] };
+
+  const headers = lines[0].toLowerCase().split(',').map((h) => h.trim().replace(/^"|"$/g, ''));
+  const dateCol = headers.findIndex((h) => /^(date|day|reporting starts)$/.test(h));
+  const amountCol = headers.findIndex((h) => /(amount|spend|cost)/.test(h));
+  if (dateCol < 0 || amountCol < 0) {
+    return { ok: false, error: `Could not find a date and an amount column in: ${headers.join(', ')}`, imported: 0, duplicates: 0, skipped: [] };
+  }
+
+  let imported = 0;
+  let duplicates = 0;
+  const skipped: { line: number; reason: string }[] = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const cells = lines[i].split(',').map((c) => c.trim().replace(/^"|"$/g, ''));
+    const rawDate = cells[dateCol] ?? '';
+    const rawAmount = (cells[amountCol] ?? '').replace(/[$,\s]/g, '');
+    const date = /^\d{4}-\d{2}-\d{2}/.test(rawDate) ? rawDate.slice(0, 10) : null;
+    const amount = Number(rawAmount);
+    if (!date) { skipped.push({ line: i + 1, reason: `unreadable date "${rawDate}"` }); continue; }
+    if (!Number.isFinite(amount) || amount < 0) { skipped.push({ line: i + 1, reason: `unreadable amount "${cells[amountCol]}"` }); continue; }
+    const cents = Math.round(amount * 100);
+    if (cents === 0) { skipped.push({ line: i + 1, reason: 'zero spend' }); continue; }
+
+    const { count } = await db.spendEntry.createMany({
+      data: [{
+        organizationId,
+        channel: flight.channel,
+        kind: 'ad',
+        certainty: 'estimated',
+        cents,
+        campaignId: flight.campaignId,
+        flightId,
+        providerRef: `flight:${flightId}:${date}`,
+        note: `Imported from platform report (${date})`,
+      }],
+      skipDuplicates: true,
+    });
+    if (count === 1) imported += 1;
+    else duplicates += 1;
+  }
+
+  return { ok: true, imported, duplicates, skipped };
+}
+

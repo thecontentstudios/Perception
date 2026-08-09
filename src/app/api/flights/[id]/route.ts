@@ -21,7 +21,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     const principal = await require_('publish');
     const { id } = await params;
 
-    let body: { action?: string; cents?: number; period?: string; invoiceCents?: number };
+    let body: { action?: string; cents?: number; period?: string; invoiceCents?: number; csv?: string };
     try {
       body = await req.json();
     } catch {
@@ -62,6 +62,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       );
       if (!r.ok) return NextResponse.json({ ok: false, reason: r.error }, { status: 422 });
       return NextResponse.json({ ok: true });
+    }
+
+    if (body.action === 'import-csv') {
+      const { importFlightSpendCsv } = await import('@/lib/flights');
+      const r = await importFlightSpendCsv(principal.organizationId, id, body.csv ?? '');
+      if (!r.ok) return NextResponse.json({ ok: false, reason: r.error }, { status: 422 });
+      return NextResponse.json(r);
     }
 
     if (body.action === 'settle') {

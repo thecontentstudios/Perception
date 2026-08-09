@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, dbAvailable } from '@/lib/db';
 import { handle, require_, HttpError } from '@/lib/auth/guard';
-import { briefFor, flightResults, planFlight, type FlightPlan } from '@/lib/flights';
+import { briefFor, driftReport, flightResults, planFlight, type FlightPlan } from '@/lib/flights';
 
 export const dynamic = 'force-dynamic';
 
@@ -68,6 +68,7 @@ export async function GET() {
 
     return NextResponse.json({
       ok: true,
+      drift: await driftReport(principal.organizationId),
       flights: await Promise.all(
         flights.map(async (f) => ({
           ...f,

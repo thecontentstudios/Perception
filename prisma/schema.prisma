@@ -805,6 +805,11 @@ model AdFlight {
   /// The invoice total, once known. Until then the ledger rows carry the
   /// running estimate.
   settledCents   Int?
+  /// What the estimates summed to at the moment the invoice settled them.
+  /// Stored, not reconstructed: this is the number the invoice graded, and
+  /// the drift between the two is how the product learns whether its own
+  /// ranges deserve trust.
+  estimatedCentsAtSettle Int?
 
   spend SpendEntry[]
 

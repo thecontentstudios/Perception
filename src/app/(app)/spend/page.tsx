@@ -113,13 +113,18 @@ export default function SpendPage() {
    * "what would this cost" to "we are doing this" is a deliberate click.
    */
   const [flights, setFlights] = useState<FlightRow[]>([]);
+  const [drift, setDrift] = useState<string | null>(null);
   const [brief, setBrief] = useState<{ id: string; platform: { name: string; url: string }; text: string; statement: string } | null>(null);
   const [flightMsg, setFlightMsg] = useState<string | null>(null);
 
   const loadFlights = () =>
     fetch('/api/flights')
       .then((r) => r.json())
-      .then((d) => d.ok && setFlights(d.flights))
+      .then((d) => {
+        if (!d.ok) return;
+        setFlights(d.flights);
+        if (d.drift?.verdict) setDrift(d.drift.verdict);
+      })
       .catch(() => {});
   useEffect(() => {
     void loadFlights();
@@ -515,6 +520,11 @@ export default function SpendPage() {
               </select>
             </label>
           </div>
+          {drift && (
+            <div style={{ fontSize: 12, color: 'var(--ink-2)', marginBottom: 10, maxWidth: '68ch' }} title="Settled invoices compared against what the estimates said at the time.">
+              {drift}
+            </div>
+          )}
           {flightMsg && <div className="notice warn" style={{ marginBottom: 10 }}>{flightMsg}</div>}
 
           {flights.length > 0 && (
