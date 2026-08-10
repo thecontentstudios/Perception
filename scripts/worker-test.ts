@@ -265,6 +265,8 @@ async function main() {
 
   await replySection();
 
+  await feasibleSection();
+
   await cleanup();
 }
 
@@ -1012,6 +1014,90 @@ async function replySection() {
   } finally {
     removeGrant('mastodon');
     removeGrant('bluesky');
+  }
+}
+
+
+/**
+ * The feasible tier closes: Pinterest and Google Business publish.
+ *
+ * Eight of eighteen now. Pinterest is the second image-only platform and
+ * the first where the platform's own outbound-click count is real; Google
+ * Business reaches somebody searching for you right now, and keeps no like
+ * count on posts — the honest tables say so.
+ */
+async function feasibleSection() {
+  console.log('\n== Pinterest pins and Google Business posts, 8 of 18 ==');
+
+  const PIN = process.env.PINTEREST_BASE_URL || 'http://localhost:4328';
+  const GBP = process.env.GBP_BASE_URL || 'http://localhost:4329';
+  for (const [base, name] of [[PIN, 'pinterest'], [GBP, 'gbp']] as const) {
+    const up = await fetch(`${base}/__posts`).then((r) => r.ok).catch(() => false);
+    if (!up) return bad(`mock-${name} is not running`);
+    await fetch(`${base}/__reset`, { method: 'POST' });
+  }
+
+  const { pinterestPublisher } = await import('../src/lib/publishers/pinterest');
+  const { gbpPublisher } = await import('../src/lib/publishers/gbp');
+  const { publisherTier } = await import('../src/lib/publishers/tiers');
+
+  saveGrant({
+    channel: 'pinterest', accessToken: process.env.MOCK_PINTEREST_TOKEN || 'mock-pinterest-token',
+    refreshToken: null, expiresInSec: null, scopes: ['pins:write'],
+    accountLabel: '@summitlocal', externalAccountId: 'board-summit-1',
+  });
+  saveGrant({
+    channel: 'google_business', accessToken: process.env.MOCK_GBP_TOKEN || 'mock-gbp-token',
+    refreshToken: null, expiresInSec: null, scopes: ['business.manage'],
+    accountLabel: 'Summit Local — Main St', externalAccountId: 'accounts/108/locations/42',
+  });
+
+  try {
+    const img = [{ bytes: new TextEncoder().encode('img'), mime: 'image/jpeg', altText: 'Spring beds', publicUrl: 'https://media.example.test/beds.jpg' }];
+
+    // Pinterest: image-only, board-addressed, title from the first line.
+    const noImg = await pinterestPublisher.publish('A pin with no image', {});
+    !noImg.ok && /no text-only pins/.test(noImg.error ?? '')
+      ? ok('pinterest refuses a text-only pin, in words about the platform')
+      : bad(`pinterest text-only: ${JSON.stringify(noImg).slice(0, 100)}`);
+
+    const pin = await pinterestPublisher.publish('Spring cleanups\nFlat quotes, book online.', { media: img });
+    pin.ok ? ok(`pinterest: pin created (${pin.id})`) : bad(`pin: ${pin.error}`);
+    const pinWire = await fetch(`${PIN}/__posts`).then((r) => r.json());
+    pinWire.pins[0]?.board_id === 'board-summit-1' && pinWire.pins[0]?.title === 'Spring cleanups'
+      ? ok('the pin carries its board and the first line as title')
+      : bad(`pin wire: ${JSON.stringify(pinWire.pins[0]).slice(0, 120)}`);
+
+    await fetch(`${PIN}/__metrics`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: pin.id, impressions: 1500, saves: 22, clicks: 31 }),
+    });
+    const pm = await pinterestPublisher.fetchMetrics!(pin.id!);
+    pm.ok && pm.metrics?.impressions === 1500 && pm.metrics?.clicks === 31
+      ? ok('pinterest reports reach and its own outbound clicks (1,500 / 31)')
+      : bad(`pinterest metrics: ${JSON.stringify(pm)}`);
+
+    // Google Business: text-first, resource-name ids, insights per post.
+    const post = await gbpPublisher.publish('Now booking spring cleanups — call or book online.', {});
+    post.ok && /localPosts\//.test(post.id ?? '')
+      ? ok(`google business: post live (${post.id?.split('/localPosts/')[1]})`)
+      : bad(`gbp post: ${JSON.stringify(post).slice(0, 120)}`);
+
+    await fetch(`${GBP}/__metrics`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: post.id, views: 812, clicks: 47 }),
+    });
+    const gm = await gbpPublisher.fetchMetrics!(post.id!);
+    gm.ok && gm.metrics?.impressions === 812 && gm.metrics?.clicks === 47 && gm.metrics?.engagements === null
+      ? ok('gbp reports search views and click-throughs; engagement stays null — Google keeps no like count')
+      : bad(`gbp metrics: ${JSON.stringify(gm)}`);
+
+    publisherTier('pinterest').tier === 'live' && publisherTier('google_business').tier === 'live'
+      ? ok('both answer "live" — the tier stays computed, never written')
+      : bad(`tiers: ${publisherTier('pinterest').tier}/${publisherTier('google_business').tier}`);
+  } finally {
+    removeGrant('pinterest');
+    removeGrant('google_business');
   }
 }
 

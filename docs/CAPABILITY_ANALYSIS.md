@@ -20,7 +20,7 @@ to the cent. What has not kept pace is the part that touches the outside world.
 | Server surface (`src/app/api`) | ~3,700 lines | Real, authenticated, tenant-scoped |
 | Worker + queue | ~420 lines | Real; fires scheduled posts |
 | Tests | ~4,800 lines | 719 checks, five suites |
-| **Channels that can actually publish** | **6 of 18** | Bluesky, Mastodon, Facebook, Instagram, Threads, Reddit |
+| **Channels that can actually publish** | **8 of 18** | + Pinterest, Google Business — the feasible tier is closed |
 | **Channels that can actually send** | **2 of 2** | Email through Resend, SMS through Twilio |
 | **Ad platforms that can actually buy** | **0 of 11** | Priced, planned, never purchased |
 
@@ -463,7 +463,18 @@ sentence; fully set up, the card folds to one quiet line.
 ### Smaller adds, in fit order
 
 Campaign-level budget caps; contact and ledger CSV export (portability is
-trust); Pinterest and Google Business publishers; WhatsApp when Meta
-clears it.
+trust); WhatsApp when Meta clears it.
+
+### The feasible tier closes (August 8) — **done**
+
+Pinterest and Google Business ship as the seventh and eighth live
+publishers. Pinterest is the second image-only platform (a pin *is* an
+image, fetched by URL, landing on a board carried by the grant) and the
+first where the platform's own outbound-click count is a real number.
+Google Business posts reach somebody searching for the business right now;
+its insights report search views and click-throughs and no like count —
+`REPORTS` says so, because nobody can have a number Google does not keep.
+Every remaining unbuilt channel is now either approval-gated (their clock)
+or API-less (nobody's).
 
 ## What is deliberately not on this list

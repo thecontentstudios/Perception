@@ -90,7 +90,9 @@ const REPORTS: Record<Channel, PlatformReports> = {
   linkedin: { impressions: true, engagements: true, clicks: true, spend: true },
   tiktok: { impressions: true, engagements: true, clicks: true, spend: true },
   youtube: { impressions: true, engagements: true, clicks: true, spend: true },
-  google_business: { impressions: true, engagements: true, clicks: true, spend: true },
+  // Post insights are views and click-throughs; Google keeps no like
+  // count on Business posts, so nobody can have one.
+  google_business: { impressions: true, engagements: false, clicks: true, spend: true },
   pinterest: { impressions: true, engagements: true, clicks: true, spend: true },
   snapchat: { impressions: true, engagements: true, clicks: true, spend: true },
   x: { impressions: true, engagements: true, clicks: true, spend: true },
@@ -121,7 +123,7 @@ const OURS: Metric[] = ['leads', 'conversions', 'revenue'];
  * platform will not say" into "we have not asked", which is the exact
  * distinction this file exists to preserve.
  */
-const INGESTED: Channel[] = ['email', 'sms', 'bluesky', 'mastodon', 'website', 'facebook', 'instagram', 'threads', 'reddit'];
+const INGESTED: Channel[] = ['email', 'sms', 'bluesky', 'mastodon', 'website', 'facebook', 'instagram', 'threads', 'reddit', 'pinterest', 'google_business'];
 
 export interface MeasurabilityContext {
   /** Channels holding a live grant right now. */
