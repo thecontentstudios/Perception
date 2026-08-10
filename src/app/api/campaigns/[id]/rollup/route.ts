@@ -29,7 +29,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 
     const campaign = await db.campaign.findFirst({
       where: { id, organizationId: principal.organizationId },
-      select: { id: true, name: true, goal: true },
+      select: { id: true, name: true, goal: true, budgetCents: true, budgetHardStop: true },
     });
     if (!campaign) return NextResponse.json({ ok: false, reason: 'No such campaign.' }, { status: 404 });
 
@@ -123,6 +123,18 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
         // a guess dressed as arithmetic.
         costPerResultCents: r.conversions > 0 && r.exactCents > 0 ? Math.round(r.exactCents / r.conversions) : null,
       })),
+      budget:
+        campaign.budgetCents == null
+          ? null
+          : {
+              capCents: campaign.budgetCents,
+              hardStop: campaign.budgetHardStop,
+              // Everything the campaign has cost, exact and estimated alike:
+              // a cap is about money leaving, and an estimate that has not
+              // settled is money that has already left.
+              spentCents: spend.reduce((a, e) => a + e.cents, 0),
+              headroomCents: campaign.budgetCents - spend.reduce((a, e) => a + e.cents, 0),
+            },
       totals: {
         exactCents: spend.filter((e) => e.certainty === 'exact').reduce((a, e) => a + e.cents, 0),
         estimatedCents: spend.filter((e) => e.certainty !== 'exact').reduce((a, e) => a + e.cents, 0),

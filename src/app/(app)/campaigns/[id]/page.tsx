@@ -35,6 +35,7 @@ interface Rollup {
   flights: { id: string; channel: string; status: string; dailyCents: number; days: number; settledCents: number | null; results: { conversions: number; revenueCents: number; costPerResultCents: number | null; certainty: string | null } }[];
   costs: { channel: string; exactCents: number; estimatedCents: number; conversions: number; revenueCents: number; costPerResultCents: number | null }[];
   totals: { exactCents: number; estimatedCents: number; conversions: number; revenueCents: number };
+  budget: { capCents: number; hardStop: boolean; spentCents: number; headroomCents: number } | null;
 }
 
 export default function CampaignDetailPage() {
@@ -185,6 +186,29 @@ export default function CampaignDetailPage() {
             defaultOpen
             summary={`${fmtMoney(rollup.totals.exactCents / 100)} spent · ${rollup.totals.conversions} results${rollup.totals.revenueCents > 0 ? ` · ${fmtMoney(rollup.totals.revenueCents / 100)} back` : ''}`}
           >
+            {rollup.budget && (
+              <div
+                className={`notice ${rollup.budget.headroomCents < 0 ? 'warn' : ''}`}
+                style={{ marginBottom: 10, fontSize: 13 }}
+              >
+                <strong>
+                  <PriceTag kind="exact" cents={rollup.budget.spentCents} /> of{' '}
+                  <PriceTag kind="exact" cents={rollup.budget.capCents} />
+                </strong>{' '}
+                {rollup.budget.headroomCents >= 0 ? (
+                  <>
+                    spent on this campaign — <PriceTag kind="exact" cents={rollup.budget.headroomCents} /> left.
+                  </>
+                ) : (
+                  <>
+                    spent on this campaign — <PriceTag kind="exact" cents={-rollup.budget.headroomCents} /> over the cap.
+                  </>
+                )}{' '}
+                {rollup.budget.hardStop
+                  ? 'Sends are refused past it.'
+                  : 'The cap warns rather than stopping sends.'}
+              </div>
+            )}
             <div style={{ overflowX: 'auto' }}>
               <table className="table">
                 <thead>

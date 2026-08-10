@@ -2056,6 +2056,117 @@ async function main() {
     }
   }
 
+  console.log('\n== A campaign has its own ceiling, and the block names which ==');
+  {
+    const user = await db.user.findFirst({ where: { passwordHash: { not: null } } });
+    const campaign = await db.campaign.findFirst({ select: { id: true, organizationId: true, name: true } });
+    if (!user || !campaign) {
+      bad('no seeded user or campaign for the cap section');
+    } else {
+      const login = await fetch(`${BASE}/api/auth/login`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: user.email, password: process.env.SEED_PASSWORD || 'demo-password-change-me' }),
+      });
+      const cookie = login.headers.get('set-cookie')?.split(';')[0] ?? '';
+      const auth = { cookie, 'content-type': 'application/json' };
+      const orgId = campaign.organizationId;
+      const stampC = Date.now();
+
+      (await fetch(`${BASE}/api/campaigns/${campaign.id}/budget`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ capCents: 100 }),
+      })).status === 401
+        ? ok('setting a cap requires a session')
+        : bad('anonymous cap set allowed');
+
+      // Omitting the field is a malformed call, not a silent removal.
+      (await fetch(`${BASE}/api/campaigns/${campaign.id}/budget`, {
+        method: 'POST', headers: auth, body: JSON.stringify({ hardStop: true }),
+      })).status === 400
+        ? ok('an omitted cap is refused rather than silently clearing one')
+        : bad('omitting capCents did not 400');
+
+      // Spend most of a small cap, then try to send past it.
+      await db.spendEntry.create({
+        data: {
+          organizationId: orgId, channel: 'EMAIL', kind: 'message', certainty: 'exact',
+          cents: 900, campaignId: campaign.id, providerRef: `cap-${stampC}`,
+        },
+      });
+      const set = await fetch(`${BASE}/api/campaigns/${campaign.id}/budget`, {
+        method: 'POST', headers: auth, body: JSON.stringify({ capCents: 1000, hardStop: true }),
+      }).then((r) => r.json());
+      set.ok && set.budget.budgetCents === 1000 ? ok('a lifetime cap saves on the campaign') : bad(`cap set: ${JSON.stringify(set)}`);
+
+      // Texting needs its 10DLC registration to be settled before any
+      // budget question arises — an unregistered channel cannot send at
+      // any price, and the send path checks that first, correctly. Borrow
+      // a connected account and give it back.
+      const smsAcct = await db.connectedAccount.findFirst({ where: { organizationId: orgId, channel: 'SMS' } });
+      const priorStatus = smsAcct?.status ?? null;
+      let madeAcct: string | null = null;
+      if (smsAcct) {
+        await db.connectedAccount.update({ where: { id: smsAcct.id }, data: { status: 'CONNECTED' } });
+      } else {
+        madeAcct = (await db.connectedAccount.create({
+          data: {
+            organizationId: orgId, channel: 'SMS', displayName: 'Twilio (cap test)',
+            destinationKind: 'sending number', status: 'CONNECTED', scopes: [],
+          },
+        })).id;
+      }
+
+      // SMS, not email: 400 emails inside the free allowance cost nothing,
+      // and a $0 send cannot exceed any cap — the product being right, not
+      // the cap being broken. Texts cost real cents per segment.
+      //
+      // The hour is fixed at 20:00 UTC (1pm Pacific, 4pm Eastern, 10am
+      // Hawaii) so the quiet-hours gate can never be what refuses this and
+      // the section cannot become a clock-dependent flake.
+      const contacts = await db.contact.findMany({
+        where: { organizationId: orgId, smsConsent: 'SUBSCRIBED', phone: { not: null } },
+        take: 200, select: { id: true },
+      });
+      const daytimeUtc = `${new Date().toISOString().slice(0, 10)}T20:00:00Z`;
+      const overCap = await fetch(`${BASE}/api/send`, {
+        method: 'POST', headers: auth,
+        body: JSON.stringify({
+          channel: 'sms', body: 'Testing the ceiling.',
+          contactIds: contacts.map((c) => c.id), campaignId: campaign.id, sendAt: daytimeUtc,
+        }),
+      });
+      const overBody = await overCap.json();
+      const reason = String(overBody.reason ?? '');
+      overCap.status === 402 && /campaign cap/i.test(reason)
+        ? ok('a send past the campaign cap is refused, and the message names which cap')
+        : bad(`over-cap send: ${overCap.status} ${JSON.stringify(overBody).slice(0, 160)}`);
+      reason.includes(campaign.name)
+        ? ok(`and names the campaign itself ("...on ${campaign.name}...")`)
+        : bad(`message does not name the campaign: ${reason.slice(0, 120)}`);
+
+      // The rollup reports the ceiling and what is left.
+      const roll = await fetch(`${BASE}/api/campaigns/${campaign.id}/rollup`, { headers: { cookie } }).then((r) => r.json());
+      roll.budget?.capCents === 1000 && roll.budget.headroomCents === 1000 - roll.budget.spentCents
+        ? ok(`the rollup carries the cap and its headroom (${roll.budget.headroomCents}\u00a2 left)`)
+        : bad(`rollup budget: ${JSON.stringify(roll.budget)}`);
+
+      // Removing it is explicit, and sends flow again.
+      const cleared = await fetch(`${BASE}/api/campaigns/${campaign.id}/budget`, {
+        method: 'POST', headers: auth, body: JSON.stringify({ capCents: null }),
+      }).then((r) => r.json());
+      cleared.ok && cleared.budget.budgetCents === null
+        ? ok('null removes the cap explicitly')
+        : bad(`clear: ${JSON.stringify(cleared)}`);
+
+      if (smsAcct && priorStatus) {
+        await db.connectedAccount.update({ where: { id: smsAcct.id }, data: { status: priorStatus } });
+      }
+      if (madeAcct) await db.connectedAccount.delete({ where: { id: madeAcct } }).catch(() => {});
+      await db.spendEntry.deleteMany({ where: { providerRef: `cap-${stampC}` } });
+      await db.campaign.update({ where: { id: campaign.id }, data: { budgetCents: null, budgetHardStop: false } });
+      await db.auditEvent.deleteMany({ where: { organizationId: orgId, action: 'campaign.budget' } });
+    }
+  }
+
   console.log('\n== The week on one page, and it declines to pad ==');
   {
     const user = await db.user.findFirst({ where: { passwordHash: { not: null } } });

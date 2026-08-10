@@ -403,6 +403,16 @@ export function checkBudget(args: {
   spentCents: number;
   projectedCents: number;
   hardStop: boolean;
+  /**
+   * What the cap covers, in the owner's words — "this month", "on this
+   * campaign". The message used to hardcode the monthly case, which was
+   * fine while a monthly cap was the only kind and became a lie the moment
+   * a campaign cap existed: an owner told they are near their monthly limit
+   * goes and looks at the wrong screen.
+   */
+  period?: string;
+  /** Shown when a message needs to name which cap bound. */
+  label?: string;
 }): BudgetCheck {
   const headroom = args.capCents - args.spentCents;
   const after = args.spentCents + args.projectedCents;
@@ -412,11 +422,11 @@ export function checkBudget(args: {
   let message: string;
   if (!wouldExceed) {
     const pct = args.capCents > 0 ? Math.round((after / args.capCents) * 100) : 0;
-    message = `${amount(after)} of ${amount(args.capCents)} this month (${pct}%). ${amount(args.capCents - after)} left after this send.`;
+    message = `${amount(after)} of ${amount(args.capCents)} ${args.period ?? 'this month'} (${pct}%). ${amount(args.capCents - after)} left after this send.`;
   } else if (blocked) {
-    message = `Blocked. This send is ${amount(args.projectedCents)} and only ${amount(Math.max(0, headroom))} is left of the ${amount(args.capCents)} cap. Raise the cap or cut the audience.`;
+    message = `Blocked by the ${args.label ?? 'monthly'} cap. This send is ${amount(args.projectedCents)} and only ${amount(Math.max(0, headroom))} is left of the ${amount(args.capCents)} cap ${args.period ?? 'this month'}. Raise the cap or cut the audience.`;
   } else {
-    message = `This send goes ${amount(after - args.capCents)} over the ${amount(args.capCents)} cap. Your cap is set to warn, not to stop, so it will go out.`;
+    message = `This send goes ${amount(after - args.capCents)} over the ${amount(args.capCents)} ${args.label ?? 'monthly'} cap ${args.period ?? 'this month'}. That cap is set to warn, not to stop, so it will go out.`;
   }
   return {
     capCents: args.capCents,
@@ -427,6 +437,27 @@ export function checkBudget(args: {
     blocked,
     message,
   };
+}
+
+/**
+ * Which cap actually binds, when more than one applies.
+ *
+ * A send inside a campaign sits under two ceilings: the workspace's month
+ * and the campaign's lifetime. Both are real, and reporting the wrong one
+ * sends an owner to a screen that cannot help them — so the binding check
+ * is chosen deliberately rather than by whichever was computed last.
+ *
+ * Precedence: a blocking cap beats a warning one (it is the thing actually
+ * stopping the send); among equals, the one with the least headroom, because
+ * that is the one that will bite first.
+ */
+export function bindingBudget(checks: (BudgetCheck | null)[]): BudgetCheck | null {
+  const real = checks.filter((c): c is BudgetCheck => c !== null);
+  if (real.length === 0) return null;
+  const blocking = real.filter((c) => c.blocked);
+  const exceeding = real.filter((c) => c.wouldExceed);
+  const pool = blocking.length > 0 ? blocking : exceeding.length > 0 ? exceeding : real;
+  return pool.reduce((tightest, c) => (c.headroomCents < tightest.headroomCents ? c : tightest));
 }
 
 // ---------------------------------------------------------------------------

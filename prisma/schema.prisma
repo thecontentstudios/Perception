@@ -262,6 +262,17 @@ model Campaign {
   utmCode        String
   description    String?
   templateId     String?
+  /// A cap for the whole campaign, across every channel and every month it
+  /// runs. Deliberately not a `Budget` row: that model is month-keyed by
+  /// design, because that is how platforms bill and how owners think about
+  /// recurring spend — but a campaign is a *thing with an end*, and its
+  /// budget is a lifetime total. Two different shapes, kept apart rather
+  /// than one bent to hold both.
+  budgetCents    Int?
+  /// Whether the cap refuses or only warns. Same choice the monthly cap
+  /// offers, made separately: an owner can hard-stop one campaign's spend
+  /// while leaving the workspace cap advisory.
+  budgetHardStop Boolean        @default(false)
   createdById    String
   createdAt      DateTime       @default(now())
 

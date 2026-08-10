@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { db, dbAvailable } from '@/lib/db';
 import { handle, require_, HttpError } from '@/lib/auth/guard';
 import { reachFor } from '@/lib/audience';
-import { checkBudget, combine, projectEmail, projectSms, type Projection } from '@/lib/projection';
+import { bindingBudget, checkBudget, combine, projectEmail, projectSms, type Projection } from '@/lib/projection';
 import { previewRange, previewSms, quietHoursForAudience } from '@/lib/sms';
 import { EMAIL_RATES, SMS_RATES } from '@/lib/pricing';
 import { orgSendingStatus } from '@/lib/senders/registry';
@@ -201,14 +201,44 @@ export async function POST(req: Request) {
     // only what a provider has confirmed would let a thousand queued messages
     // sit against a cap they will certainly blow, and report the budget as
     // healthy right up to the moment they send.
-    const budgetCheck = budget
+    const monthlyCheck = budget
       ? checkBudget({
           capCents: budget.capCents,
           spentCents: spent.chargedCents + spent.committedCents,
           projectedCents: projection.exactCents,
           hardStop: budget.hardStop,
+          period: 'this month',
+          label: 'monthly',
         })
       : null;
+
+    // The campaign's own ceiling, when this send belongs to one: a lifetime
+    // total across every channel and month the campaign runs, which is a
+    // different question from "how much has this workspace spent in August".
+    const campaign = campaignId
+      ? await db.campaign.findUnique({
+          where: { id: campaignId },
+          select: { budgetCents: true, budgetHardStop: true, name: true },
+        })
+      : null;
+    const campaignSpent =
+      campaign?.budgetCents != null
+        ? (await db.spendEntry.aggregate({ where: { campaignId }, _sum: { cents: true } }))._sum.cents ?? 0
+        : 0;
+    const campaignCheck =
+      campaign?.budgetCents != null
+        ? checkBudget({
+            capCents: campaign.budgetCents,
+            spentCents: campaignSpent,
+            projectedCents: projection.exactCents,
+            hardStop: campaign.budgetHardStop,
+            period: `on ${campaign.name}`,
+            label: 'campaign',
+          })
+        : null;
+
+    // One answer to "can this go out", chosen rather than stumbled into.
+    const budgetCheck = bindingBudget([monthlyCheck, campaignCheck]);
 
     // Quiet hours, for SMS only, and **per recipient** — the window is the
     // recipient's, not the owner's. This used to check one clock, the org's
@@ -240,6 +270,7 @@ export async function POST(req: Request) {
       },
       projection,
       budget: budgetCheck,
+      budgets: { monthly: monthlyCheck, campaign: campaignCheck },
       sms: smsPreview
         ? {
             encoding: smsPreview.encoding,

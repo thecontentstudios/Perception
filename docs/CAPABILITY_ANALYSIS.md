@@ -462,8 +462,25 @@ sentence; fully set up, the card folds to one quiet line.
 
 ### Smaller adds, in fit order
 
-Campaign-level budget caps; contact and ledger CSV export (portability is
-trust); WhatsApp when Meta clears it.
+Contact and ledger CSV export (portability is trust); WhatsApp when Meta
+clears it.
+
+### Campaign budget caps (August 9) — **done**
+
+A campaign now carries its own ceiling: a **lifetime total across every
+channel and month it runs**, deliberately not a `Budget` row — that model
+is month-keyed because that is how platforms bill and how owners think
+about recurring spend, while a campaign is a thing with an end. Two shapes,
+kept apart rather than one bent to hold both.
+
+A send inside a campaign therefore sits under two ceilings, both real.
+`bindingBudget` picks which one to report — blocking beats warning, then
+least headroom, because that is the one that bites first — and the message
+names it: *"Blocked by the campaign cap … on Summer Maintenance Special"*.
+Reporting the wrong ceiling sends an owner to a screen that cannot help
+them. Removing a cap is explicit (`capCents: null`); an omitted field is a
+malformed call, because a cap that vanishes on a typo is a cap nobody is
+enforcing.
 
 ### The feasible tier closes (August 8) — **done**
 
