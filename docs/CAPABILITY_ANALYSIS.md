@@ -462,8 +462,26 @@ sentence; fully set up, the card folds to one quiet line.
 
 ### Smaller adds, in fit order
 
-Contact and ledger CSV export (portability is trust); WhatsApp when Meta
-clears it.
+WhatsApp when Meta clears it.
+
+### Data export (August 10) — **done**
+
+Portability is the condition under which trusting a product is rational: a
+business that cannot leave has not chosen to stay. Three exports, and the
+second is the one most products forget — **contacts carrying their consent
+evidence** (a list exported without the sentence each person agreed to is a
+list somebody mails elsewhere on no basis at all), **the do-not-contact
+list** (leaving with your list and without your unsubscribes means
+re-mailing every person who opted out), and **the ledger with `certainty`
+as its own column** (flattening exact and estimated would be the
+blended-money lie in a new file format).
+
+The cell writer defuses **CSV formula injection**: a contact who signed up
+as `=HYPERLINK("http://evil","click")` would otherwise become a live link
+in the owner's spreadsheet, delivered by our export of their data. Leading
+`= + - @` get an apostrophe; ordinary names are untouched. Exports need
+`manage_org`, are never cached, and are audited — a bulk download is
+exactly the event an owner would want to find afterwards.
 
 ### Campaign budget caps (August 9) — **done**
 

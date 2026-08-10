@@ -2167,6 +2167,90 @@ async function main() {
     }
   }
 
+  console.log('\n== Your data leaves with you, and a spreadsheet cannot be weaponised ==');
+  {
+    const { csvCell } = await import('../src/lib/export');
+
+    // The formula-injection defence, checked as a unit first: these are the
+    // four characters Excel, Numbers and Sheets treat as "execute this".
+    ['=HYPERLINK("http://evil","click")', '+1+1', '-2+3', '@SUM(A1)'].every((v) => csvCell(v).startsWith("'") || csvCell(v).startsWith('"\''))
+      ? ok('formula-leading cells are defused before they reach a spreadsheet')
+      : bad(`injection not defused: ${['=A', '+A', '-A', '@A'].map(csvCell).join(' | ')}`);
+    csvCell('Smith, John') === '"Smith, John"' && csvCell('He said "hi"') === '"He said ""hi"""'
+      ? ok('ordinary CSV escaping still holds for commas and quotes')
+      : bad(`escaping: ${csvCell('Smith, John')} / ${csvCell('He said "hi"')}`);
+    csvCell('Dana Whitfield') === 'Dana Whitfield'
+      ? ok('and a normal name is left alone — no apostrophe tax on everyone')
+      : bad(`plain name mangled: ${csvCell('Dana Whitfield')}`);
+
+    const user = await db.user.findFirst({ where: { passwordHash: { not: null } } });
+    if (!user) {
+      bad('no seeded user');
+    } else {
+      const login = await fetch(`${BASE}/api/auth/login`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: user.email, password: process.env.SEED_PASSWORD || 'demo-password-change-me' }),
+      });
+      const cookie = login.headers.get('set-cookie')?.split(';')[0] ?? '';
+      const orgId = (await db.membership.findFirst({ where: { userId: user.id } }))?.organizationId ?? '';
+
+      (await fetch(`${BASE}/api/export?kind=contacts`)).status === 401
+        ? ok('an export requires a session')
+        : bad('anonymous export allowed');
+      (await fetch(`${BASE}/api/export?kind=everything`, { headers: { cookie } })).status === 400
+        ? ok('an unknown export kind is refused')
+        : bad('unknown kind not refused');
+
+      const res = await fetch(`${BASE}/api/export?kind=contacts`, { headers: { cookie } });
+      const csv = await res.text();
+      /attachment; filename="contacts-\d{4}-\d{2}-\d{2}\.csv"/.test(res.headers.get('content-disposition') ?? '')
+        ? ok('it downloads as a dated file')
+        : bad(`disposition: ${res.headers.get('content-disposition')}`);
+      res.headers.get('cache-control') === 'no-store'
+        ? ok('and is never cached — it is somebody\u2019s whole customer list')
+        : bad(`cache-control: ${res.headers.get('cache-control')}`);
+      const header = csv.split('\r\n')[0];
+      header.includes('consent_basis') && header.includes('consent_evidence')
+        ? ok('contacts export carries consent evidence, not just addresses')
+        : bad(`contacts header: ${header}`);
+      csv.split('\r\n').length > 100
+        ? ok(`${csv.split('\r\n').length - 2} contacts exported`)
+        : bad(`too few rows: ${csv.split('\r\n').length}`);
+
+      // The rows nobody thinks to take.
+      const supp = await fetch(`${BASE}/api/export?kind=suppressions`, { headers: { cookie } }).then((r) => r.text());
+      supp.split('\r\n')[0] === 'channel,address,reason,detail,suppressed_at'
+        ? ok('the do-not-contact list exports too — leaving without it means re-mailing opt-outs')
+        : bad(`suppressions header: ${supp.split('\r\n')[0]}`);
+
+      // Money keeps its certainty — proven with rows, not just a header:
+      // an empty export would pass a header check while telling us nothing.
+      const stampX = Date.now();
+      await db.spendEntry.createMany({
+        data: [
+          { organizationId: orgId, channel: 'EMAIL', kind: 'message', certainty: 'exact', cents: 1234, providerRef: `exp-exact-${stampX}`, note: 'Export test, exact' },
+          { organizationId: orgId, channel: 'FACEBOOK', kind: 'ad', certainty: 'estimated', cents: 5600, providerRef: `exp-est-${stampX}`, note: 'Export test, estimated' },
+        ],
+      });
+      const ledger = await fetch(`${BASE}/api/export?kind=ledger`, { headers: { cookie } }).then((r) => r.text());
+      const lines = ledger.split('\r\n');
+      lines[0].includes('certainty')
+        ? ok('the ledger keeps exact and estimated apart in their own column')
+        : bad(`ledger header: ${lines[0]}`);
+      lines.some((l) => l.includes('exact') && l.includes('12.34')) && lines.some((l) => l.includes('estimated') && l.includes('56.00'))
+        ? ok('and both rows survive the trip with their certainty and their dollars')
+        : bad(`ledger rows: ${lines.filter((l) => /Export test/.test(l)).join(' | ').slice(0, 160)}`);
+      await db.spendEntry.deleteMany({ where: { providerRef: { startsWith: 'exp-' } } });
+
+      const audited = await db.auditEvent.findFirst({
+        where: { organizationId: orgId, action: 'data.exported' },
+        orderBy: { at: 'desc' },
+      });
+      audited ? ok(`and every export is audited (${audited.detail})`) : bad('no audit row for the export');
+      await db.auditEvent.deleteMany({ where: { organizationId: orgId, action: 'data.exported' } });
+    }
+  }
+
   console.log('\n== The week on one page, and it declines to pad ==');
   {
     const user = await db.user.findFirst({ where: { passwordHash: { not: null } } });
