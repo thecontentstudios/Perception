@@ -1049,10 +1049,72 @@ async function measurabilityChecks() {
     : bad(`bluesky summary reads "${withBluesky}"`);
 }
 
+/**
+ * The install path does not rot silently.
+ *
+ * `npm run setup` writes a `.env`, `.env.example` documents what each key is
+ * for, and `docs/RUNNING.md` tells someone what to type. Three files that must
+ * agree, none of which fails loudly when they stop agreeing — a key added to
+ * setup and not to the example is invisible until somebody with a real
+ * account cannot work out why their credential is ignored.
+ */
+function installPathChecks() {
+  console.log('\n== Install path stays consistent ==');
+
+  const setup = readFileSync('scripts/setup.ts', 'utf8');
+  const example = readFileSync('.env.example', 'utf8');
+  const running = readFileSync('docs/RUNNING.md', 'utf8');
+  const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+
+  // Keys written by setup, read out of the `defaults()` literal.
+  const block = setup.slice(setup.indexOf('const generated'), setup.indexOf('for (const key of Object.keys(generated))'));
+  const written = [...block.matchAll(/^\s{4}([A-Z][A-Z0-9_]+):/gm)].map((m) => m[1]);
+
+  written.length > 15
+    ? ok(`setup writes ${written.length} keys`)
+    : bad(`only found ${written.length} keys in setup's defaults — did the literal move?`);
+
+  const undocumented = written.filter((k) => !example.includes(k));
+  undocumented.length === 0
+    ? ok('every key setup writes is documented in .env.example')
+    : bad(`.env.example never mentions: ${undocumented.join(', ')}`);
+
+  // The guide promises three commands. They have to exist.
+  for (const cmd of ['setup', 'doctor', 'mocks', 'dev', 'worker', 'db:seed']) {
+    pkg.scripts[cmd]
+      ? ok(`npm run ${cmd} exists`)
+      : bad(`docs/RUNNING.md tells people to run "npm run ${cmd}" and package.json has no such script`);
+  }
+
+  // The seeded login in the guide has to be the one the seed actually makes.
+  const seed = readFileSync('prisma/seed.ts', 'utf8');
+  const defaultPassword = seed.match(/SEED_PASSWORD \|\| '([^']+)'/)?.[1];
+  defaultPassword && running.includes(defaultPassword)
+    ? ok(`the guide prints the seed's real default password`)
+    : bad(`docs/RUNNING.md does not match the seed's default password (${defaultPassword ?? 'not found'})`);
+
+  // The seed inserts `USERS` from demo-data, so that is where the address
+  // actually lives — checking seed.ts for the literal would pass forever by
+  // never finding it.
+  const owner = [...readFileSync('src/lib/demo-data.ts', 'utf8').matchAll(/role: 'owner', email: '([^']+)'/g)][0]?.[1];
+  owner && running.includes(owner)
+    ? ok(`the guide prints the seeded owner account (${owner})`)
+    : bad(`docs/RUNNING.md does not print the seeded owner address (${owner ?? 'none found in demo-data'})`);
+
+  // Every stand-in port in the guide's table must be a port a mock listens on.
+  const mockPorts = [...readFileSync('scripts/mocks.js', 'utf8').matchAll(/\['(\w+)', (\d+)\]/g)].map((m) => Number(m[2]));
+  const documented = [...running.matchAll(/^\| (43\d\d) \|/gm)].map((m) => Number(m[1]));
+  const wrong = documented.filter((p) => !mockPorts.includes(p));
+  documented.length === mockPorts.length && wrong.length === 0
+    ? ok(`all ${mockPorts.length} stand-in ports in the guide match scripts/mocks.js`)
+    : bad(`guide lists ${documented.length} ports for ${mockPorts.length} mocks${wrong.length ? `; wrong: ${wrong.join(', ')}` : ''}`);
+}
+
 webhookSignatureChecks()
   .then(async () => audienceQuietChecks())
   .then(measurabilityChecks)
   .then(readPathChecks)
+  .then(installPathChecks)
   .then(() => {
   console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL UNIT CHECKS PASSED');
   process.exit(failures ? 1 : 0);

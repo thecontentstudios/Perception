@@ -47,6 +47,23 @@ async function main() {
     // No Redis means the in-process fallback, which each run gets fresh.
   }
 
+  // A running `npm run worker` drains the same queue this suite dispatches,
+  // and whichever process claims a row first keeps it. Both are behaving
+  // correctly — the claim is a compare-and-swap so that several workers *can*
+  // run — but it makes the send assertions unassertable, and the symptom is a
+  // baffling "sent 1108 of 1111" that reads as a product bug. Say the real
+  // thing instead of failing three assertions later for the wrong reason.
+  const { workerPresence } = await import('../src/lib/queue');
+  const presence = await workerPresence();
+  if (presence.running) {
+    console.error(
+      `\n  A scheduler is running (last scan ${presence.agoSec}s ago).\n` +
+      `  It dispatches the same queue this suite does, so the send counts\n` +
+      `  cannot be asserted. Stop \`npm run worker\` and run this again.\n`
+    );
+    process.exit(1);
+  }
+
   console.log('\n== Passwords ==');
   {
     const hash = await hashPassword('a-perfectly-fine-passphrase');
@@ -396,15 +413,43 @@ async function main() {
         },
       });
       try {
-        await send({ channel: 'email', subject: 'Hello', body: 'Hi' });
-        const before = await db.spendEntry.count({ where: { organizationId: orgId, kind: 'message' } });
+        const queued = await send({ channel: 'email', subject: 'Hello', body: 'Hi' });
+        const variationId = (queued.body as { variationId?: string }).variationId ?? '';
+
+        // Count only what *this* send could have produced.
+        //
+        // A plain `count({ organizationId, kind: 'message' })` before and after
+        // was racy against a running `npm run worker`: the worker dispatches
+        // the same org's queue on its own 30-second scan, and a real charge
+        // landing between the two counts read as this test's unreferenced send
+        // being charged. Both processes are behaving correctly; only the
+        // measurement was wrong.
+        //
+        // The discriminator is `providerRef`. Every legitimate message charge
+        // carries one — the schema depends on it for the idempotency index —
+        // so a charge for a send whose provider returned *no id* is precisely
+        // a `kind: 'message'` row that has none. The worker cannot create one
+        // of those no matter what it dispatches.
+        const unreferenced = () => db.spendEntry.count({
+          where: { organizationId: orgId, kind: 'message', providerRef: null },
+        });
+        const before = await unreferenced();
         const r = await dispatch('email', { limit: 10_000 });
-        const afterCount = await db.spendEntry.count({ where: { organizationId: orgId, kind: 'message' } });
-        void before;
+        const afterCount = await unreferenced();
+
         r.failed > 0 && r.sent === 0
           ? ok('a success with no message id is failed, not charged')
           : bad(`unreferenced success: sent ${r.sent}, failed ${r.failed}`);
-        afterCount === before ? ok('and nothing was added to the ledger') : bad('an unreferenced send was charged');
+        afterCount === before
+          ? ok('and nothing was added to the ledger')
+          : bad(`an unreferenced send was charged (${before} → ${afterCount} rows with no provider ref)`);
+
+        // The deliveries themselves must record the failure rather than
+        // vanishing, or the send is silently lost.
+        const stuck = await db.emailDelivery.count({ where: { variationId, status: 'QUEUED' } });
+        stuck === 0
+          ? ok('no delivery was left queued behind the failure')
+          : bad(`${stuck} deliveries still queued after a failed dispatch`);
       } finally {
         __resetSenders();
       }
@@ -1885,9 +1930,26 @@ async function main() {
 
       const res = await fetch(`${BASE}/api/analytics`, { headers: { cookie } });
       const body = await res.json();
-      const rows = (body.performance ?? []).flatMap((p: { byChannel: { channel: string; impressions: number | null; engagements: number | null; spend: number | null }[] }) => p.byChannel);
-      const email = rows.find((r: { channel: string }) => r.channel === 'email');
 
+      // Read the email row **of the campaign we just wrote to**, not the first
+      // email row in the report.
+      //
+      // The report carries one entry per campaign and five of them have an
+      // email row, so a flat `.find(channel === 'email')` returned whichever
+      // campaign the API happened to order first — usually not this one. The
+      // check passed only when the ordering cooperated, which made it fail on
+      // the second consecutive run and look like state pollution. The numbers
+      // asserted below are the ones this block created; they only mean
+      // anything against the campaign it created them on.
+      type Row = { channel: string; impressions: number | null; engagements: number | null; spend: number | null };
+      type Perf = { campaignId: string; byChannel: Row[] };
+      const perf: Perf[] = body.performance ?? [];
+      const mine = perf.find((p) => p.campaignId === variation.contentItem.campaignId);
+      const email = mine?.byChannel.find((r) => r.channel === 'email');
+
+      mine
+        ? ok(`the seeded campaign is in the report (${mine.campaignId})`)
+        : bad(`campaign ${variation.contentItem.campaignId} is missing from the report entirely`);
       email ? ok('email appears in the report at all') : bad('email is absent from the report despite having deliveries');
 
       email?.impressions === 3
@@ -2386,13 +2448,25 @@ async function main() {
     // budget, and running them before the checks above meant the limiter was
     // already exhausted by the time those ran — the tests failed on their own
     // side effects rather than on anything the product did.
+    // Fired in parallel batches, and that is load-bearing rather than a speed
+    // optimisation. The limit is 120 in a 60-second window, so 140 requests
+    // only prove anything if they all land inside one window. Sent one at a
+    // time they did not: standalone the server answered fast enough to finish
+    // in time, but after two other suites had warmed the process the same loop
+    // took longer than 60s, the window rolled over mid-burst, the counter
+    // reset, and the test failed — on its own pacing, not on the product.
     let limited = false;
-    for (let i = 0; i < 140 && !limited; i++) {
-      const r = await fetch(`${BASE}/api/events`, {
+    const post = (i: number) =>
+      fetch(`${BASE}/api/events`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ kind: 'quote_request', key: 'pk_demo_greenscape_workspace', eventId: `rl-${i}` }),
-      });
-      if (r.status === 429) limited = true;
+      }).then((r) => r.status);
+
+    for (let batch = 0; batch < 7 && !limited; batch++) {
+      const codes = await Promise.all(
+        Array.from({ length: 20 }, (_, k) => post(batch * 20 + k))
+      );
+      if (codes.includes(429)) limited = true;
     }
     limited ? ok('the public ingest endpoint rate limits') : bad('no rate limit on /api/events');
   }

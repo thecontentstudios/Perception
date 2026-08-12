@@ -40,12 +40,62 @@ async function reachable(url: string): Promise<boolean> {
   }
 }
 
+/**
+ * Take down the whole worker tree and prove it went.
+ *
+ * Signalling the negative pid targets the process group rather than the `npx`
+ * wrapper alone, and the loop is there because a graceful shutdown finishes
+ * in-flight jobs first — returning before it has actually exited leaves the
+ * same racing process this function exists to remove. SIGKILL is the backstop
+ * for a worker wedged mid-job.
+ *
+ * The heartbeat is cleared last so the next suite does not refuse to start on
+ * a key belonging to a worker that is already gone.
+ */
+async function stopWorker(child: ReturnType<typeof spawn>): Promise<void> {
+  const pid = child.pid;
+  if (!pid) return;
+
+  const gone = () => { try { process.kill(pid, 0); return false; } catch { return true; } };
+  try { process.kill(-pid, 'SIGTERM'); } catch { /* already gone */ }
+  for (let i = 0; i < 30 && !gone(); i++) await sleep(200);
+  if (!gone()) {
+    try { process.kill(-pid, 'SIGKILL'); } catch { /* raced with exit */ }
+    for (let i = 0; i < 10 && !gone(); i++) await sleep(100);
+  }
+
+  try {
+    const { default: IORedis } = await import('ioredis');
+    const { redisConnection } = await import('../src/lib/queue');
+    const conn = new IORedis({ ...(redisConnection() as { host: string; port: number }), lazyConnect: true });
+    await conn.connect();
+    await conn.del('worker:heartbeat');
+    await conn.quit();
+  } catch {
+    // No Redis means no heartbeat to strand.
+  }
+}
+
 async function main() {
   process.env.TOKEN_ENCRYPTION_KEY ||= Buffer.from(new Uint8Array(32).fill(7)).toString('base64');
 
   if (!(await reachable(`http://${HOST}/__posts`))) {
     console.log(`\n  SKIP mock instance not running — start it with:\n        node scripts/mock-mastodon.js ${MOCK_PORT}\n`);
     return;
+  }
+
+  // This suite claims slots and drains the queue. A real worker doing the same
+  // job at the same time takes rows out from under it, so the counts below
+  // measure the two processes rather than the product. Refuse with the reason.
+  const { workerPresence } = await import('../src/lib/queue');
+  const presence = await workerPresence();
+  if (presence.running) {
+    console.error(
+      `\n  A scheduler is running (last scan ${presence.agoSec}s ago).\n` +
+      `  It claims the same slots this suite does. Stop \`npm run worker\`\n` +
+      `  and run this again.\n`
+    );
+    process.exit(1);
   }
 
   // Start from a known state: the mock honours idempotency keys the way real
@@ -90,9 +140,18 @@ async function main() {
   const before = await fetch(`http://${HOST}/__posts`).then((r) => r.json());
 
   // Start the worker exactly as an operator would.
+  //
+  // `detached` is not incidental. `npx tsx worker.ts` is two processes — npx
+  // wraps the node process that actually runs the worker — and killing the
+  // handle we hold only kills the wrapper. The real worker survived every run
+  // of this suite, kept scanning every two seconds, and quietly competed for
+  // rows with every later test and with the next run of this file. It is the
+  // cause of every "sent 1108 of 1111" that looked like a product bug.
+  // Its own process group is what makes the whole tree killable.
   const worker = spawn('npx', ['tsx', 'worker.ts'], {
     env: { ...process.env, SCAN_INTERVAL_MS: '2000' },
     stdio: ['ignore', 'pipe', 'pipe'],
+    detached: true,
   });
   const lines: string[] = [];
   let up = false;
@@ -130,8 +189,7 @@ async function main() {
     if (v?.status === 'PUBLISHED' || v?.status === 'FAILED') { published = v; break; }
   }
 
-  worker.kill('SIGTERM');
-  await sleep(600);
+  await stopWorker(worker);
 
   if (!published) {
     bad('post never resolved within 30s');

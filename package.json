@@ -21,6 +21,9 @@
     "test:worker": "tsx scripts/worker-test.ts",
     "test:media": "tsx scripts/media-test.ts",
     "test:security": "tsx scripts/security-test.ts",
+    "mocks": "node scripts/mocks.js",
+    "setup": "tsx scripts/setup.ts",
+    "doctor": "tsx scripts/doctor.ts",
     "mock:resend": "node scripts/mock-resend.js",
     "mock:twilio": "node scripts/mock-twilio.js",
     "mock:meta": "node scripts/mock-meta.js"

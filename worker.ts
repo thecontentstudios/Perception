@@ -16,7 +16,7 @@
  */
 import 'dotenv/config';
 import { Worker } from 'bullmq';
-import { PUBLISH_QUEUE, redisConnection, type PublishJobData } from './src/lib/queue';
+import { PUBLISH_QUEUE, beatHeartbeat, redisConnection, type PublishJobData } from './src/lib/queue';
 import { scanAndEnqueue } from './src/lib/queue/scheduler';
 import { runPublishJob } from './src/lib/queue/publish-job';
 import { dispatchAll } from './src/lib/queue/dispatch';
@@ -53,6 +53,10 @@ async function scan() {
   if (scanning) return;
   scanning = true;
   try {
+    // Announce presence before doing any work, so `npm run doctor` can say the
+    // scheduler is up and the test suites can refuse to race it.
+    await beatHeartbeat();
+
     const r = await scanAndEnqueue();
     if (r.enqueued > 0) log(`scan: ${r.due} due, ${r.enqueued} enqueued`);
 
